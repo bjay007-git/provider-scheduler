@@ -1,0 +1,13 @@
+.venv/
+venv/
+.venv ProviderScheduler/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
