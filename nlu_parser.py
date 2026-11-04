@@ -12,17 +12,23 @@ from datetime import date
 import dateparser.search
 from rapidfuzz import fuzz, process
 
-HALF_DAY_KEYWORDS = {
-    "first half": "AM",
-    "second half": "PM",
-    "morning": "AM",
-    "afternoon": "PM",
-    "evening": "PM",
-    "a.m.": "AM",
-    "p.m.": "PM",
-    "am": "AM",
-    "pm": "PM",
+from scheduling import FULL_DAY
+
+# Match plurals and punctuation without letting "am" match inside a name.
+SESSION_PATTERNS = {
+    "AM": r"\b(?:mornings?|first half|a\.?m\.?)(?!\w)",
+    "PM": r"\b(?:afternoons?|second half|p\.?m\.?)(?!\w)",
+    FULL_DAY: r"\b(?:full[ -]days?|all[ -]days?|whole days?)\b",
 }
+UNSUPPORTED_SESSION = (
+    r"\b(?:evenings?|nights?|overnight|noon|midday|midnight|lunchtime|"
+    r"half[ -]days?|halves|sessions?|shifts?|hours?|early|late|lunch|full[ -]time)\b"
+    r"|\b\d{1,2}:\d{2}\b|(?<![\d-])\b\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?|o['\u2019]?clock)\b"
+    r"|\bat\s+\d{1,2}(?![\d-])\b"
+    r"|\b(?:from|between)\s+\d{1,2}\s*(?:to|and|-)\s*\d{1,2}\b"
+    r"|\b\d{1,2}\s+(?:to|until|through)\s+\d{1,2}\b"
+    r"|(?<![\d-])\b\d{1,2}\s*[-\u2013]\s*\d{1,2}\b(?![\d-])"
+)
 
 WEEKDAYS = {
     "monday": 0, "mon": 0,
@@ -90,12 +96,27 @@ def match_location(text, locations, score_cutoff=55):
     return _best_match(text, locations, _location_aliases, score_cutoff)
 
 
+def parse_session(text):
+    """Return explicit session, omission, or a validation error; never guess."""
+    if re.search(UNSUPPORTED_SESSION, text, re.IGNORECASE):
+        return None, "Unsupported session wording. Use morning, afternoon, or Full day."
+    found = {session for session, pattern in SESSION_PATTERNS.items()
+             if re.search(pattern, text, re.IGNORECASE)}
+    if len(found) > 1 or re.search(r"\b(?:not|except|excluding|neither)\b", text, re.IGNORECASE):
+        return None, "Contradictory or excluded sessions are unsupported. Use one session or Full day."
+    return next(iter(found), None), None
+
+
 def match_half_day(text):
-    lower = text.lower()
-    # check multi-word phrases before single words so "first half" wins over a stray "am"
-    for kw in sorted(HALF_DAY_KEYWORDS, key=len, reverse=True):
-        if re.search(rf"\b{re.escape(kw)}\b", lower):
-            return HALF_DAY_KEYWORDS[kw]
+    session, _ = parse_session(text)
+    return session
+
+
+def _add_command_error(text):
+    # Only ADD is implemented. Do not reinterpret future command types as ADD.
+    if re.search(r"\b(?:delete|remove|cancel|modify|edit|change|update|move|reschedule|unschedule|swap|replace|copy|duplicate)\b",
+                 text, re.IGNORECASE):
+        return "Only ADD commands are supported in this stage."
     return None
 
 
@@ -119,6 +140,14 @@ def parse_single_date(text, reference_date=None):
     fails on real sentences ('next Monday morning' -> None, oddly).
     search_dates() is built to pull a date phrase out of free text, which
     is what we actually need here."""
+    # ISO dates are unambiguous. Do not let dateparser reinterpret an invalid
+    # month as a day (e.g. 2026-13-01 becoming January 13).
+    iso_dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", text)
+    if iso_dates:
+        try:
+            return date.fromisoformat(iso_dates[0])
+        except ValueError:
+            return None
     settings = {"PREFER_DATES_FROM": "future"}
     if reference_date:
         settings["RELATIVE_BASE"] = _as_datetime(reference_date)
@@ -148,7 +177,10 @@ def parse_transcript(text, providers, locations, today=None):
 
     provider_id, provider_name, provider_score = match_provider(text, providers)
     location_id, location_name, location_score = match_location(text, locations)
-    half_day = match_half_day(text)
+    half_day, session_error = parse_session(text)
+    command_error = _add_command_error(text)
+    if half_day is None and not session_error and not command_error:
+        half_day = FULL_DAY
     is_recurring, weekdays = detect_recurrence(text)
 
     entry_date = None
@@ -164,6 +196,7 @@ def parse_transcript(text, providers, locations, today=None):
         "location_name": location_name,
         "location_score": location_score,
         "half_day": half_day,
+        "error": command_error or session_error,
         "is_recurring": is_recurring,
         "weekdays": weekdays,
         "entry_date": entry_date,

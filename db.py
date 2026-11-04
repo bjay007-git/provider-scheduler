@@ -9,6 +9,9 @@ Postgres connection later without touching the calling code.
 import sqlite3
 from datetime import date, timedelta
 from contextlib import contextmanager
+from dataclasses import dataclass
+
+from scheduling import FULL_DAY, group_assignments
 
 DB_PATH = "tiamd_scheduler.db"
 
@@ -21,6 +24,9 @@ def get_conn():
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -144,18 +150,86 @@ def is_mapped(provider_id, location_id):
 
 # ---------- schedule entries ----------
 
-def add_entry(provider_id, location_id, entry_date, half_day, source="voice"):
-    """entry_date must be an ISO string 'YYYY-MM-DD'. Returns (success, message)."""
-    with get_conn() as conn:
+@dataclass(frozen=True)
+class WriteResult:
+    entry_date: str
+    status: str  # added | conflict | invalid | error
+    message: str
+    provider_id: int | None = None
+    session: str | None = None
+
+
+def invalid_result(message, entry_date="", provider_id=None, session=None):
+    return WriteResult(str(entry_date), "invalid", message, provider_id, session)
+
+
+def _real_date(value):
+    if type(value) is date:
+        return value
+    if isinstance(value, str):
         try:
-            conn.execute(
+            parsed = date.fromisoformat(value)
+            if parsed.isoformat() == value:
+                return parsed
+        except ValueError:
+            pass
+    raise ValueError("Use a real date in YYYY-MM-DD format.")
+
+
+def _validate_assignment(conn, provider_id, location_id, entry_date, session):
+    day = _real_date(entry_date)
+    if session not in ("AM", "PM", FULL_DAY):
+        raise ValueError("Session must be AM, PM, or Full day.")
+    if type(provider_id) is not int or type(location_id) is not int:
+        raise ValueError("Provider and location IDs must be integers.")
+    provider = conn.execute("SELECT practice_id FROM providers WHERE id=?", (provider_id,)).fetchone()
+    location = conn.execute("SELECT practice_id FROM locations WHERE id=?", (location_id,)).fetchone()
+    if provider is None:
+        raise ValueError("Provider does not exist.")
+    if location is None:
+        raise ValueError("Location does not exist.")
+    if provider["practice_id"] != location["practice_id"]:
+        raise ValueError("Provider and location must belong to the same practice.")
+    if not conn.execute(
+        "SELECT 1 FROM provider_location_map WHERE provider_id=? AND location_id=?",
+        (provider_id, location_id),
+    ).fetchone():
+        raise ValueError("Provider is not allowed at this location.")
+    return day
+
+
+def add_entry(provider_id, location_id, entry_date, half_day, source="voice"):
+    """Write one logical assignment. A full day commits both sessions or neither.
+
+    Session is explicit here; only the ADD parser defaults omitted sessions.
+    Every write path, including copies and recurrence, calls this function.
+    """
+    try:
+        with get_conn() as conn:
+            # Lock before validation and conflict checking; keep the UNIQUE constraint
+            # as the final safeguard. A raised exception rolls back on close.
+            conn.execute("BEGIN IMMEDIATE")
+            day = _validate_assignment(conn, provider_id, location_id, entry_date, half_day)
+            sessions = ("AM", "PM") if half_day == FULL_DAY else (half_day,)
+            for session in sessions:
+                if conn.execute(
+                    "SELECT 1 FROM schedule_entries WHERE provider_id=? AND entry_date=? AND half_day=?",
+                    (provider_id, day.isoformat(), session),
+                ).fetchone():
+                    return WriteResult(day.isoformat(), "conflict",
+                                       f"Provider already booked for {session}; assignment skipped.",
+                                       provider_id, half_day)
+            conn.executemany(
                 "INSERT INTO schedule_entries (provider_id, location_id, entry_date, half_day, source) "
                 "VALUES (?,?,?,?,?)",
-                (provider_id, location_id, entry_date, half_day, source),
+                [(provider_id, location_id, day.isoformat(), session, source) for session in sessions],
             )
-            return True, "added"
-        except sqlite3.IntegrityError:
-            return False, "conflict: provider already booked that date/half"
+        return WriteResult(day.isoformat(), "added", "Assignment added.", provider_id, half_day)
+    except ValueError as exc:
+        return invalid_result(str(exc), entry_date, provider_id, half_day)
+    except sqlite3.Error as exc:
+        # Constraint failures other than the known booking key are database errors.
+        return WriteResult(str(entry_date), "error", f"Database error: {exc}", provider_id, half_day)
 
 
 def get_month_entries(year, month):
@@ -183,71 +257,71 @@ def get_month_entries(year, month):
 
 # ---------- speed-up features: copy day, copy single entry, recurring rule ----------
 
-def copy_day(source_date, target_dates):
-    """Copies every entry on source_date onto each date in target_dates.
-    Returns a list of (target_date, provider_id, half_day, success, message)."""
+def _source_assignments(source_date=None, entry_id=None):
     with get_conn() as conn:
-        source_entries = conn.execute(
-            "SELECT provider_id, location_id, half_day FROM schedule_entries WHERE entry_date=?",
-            (source_date,),
-        ).fetchall()
-        results = []
-        for t in target_dates:
-            for e in source_entries:
-                try:
-                    conn.execute(
-                        "INSERT INTO schedule_entries (provider_id, location_id, entry_date, half_day, source) "
-                        "VALUES (?,?,?,?, 'copy')",
-                        (e["provider_id"], e["location_id"], t, e["half_day"]),
-                    )
-                    results.append((t, e["provider_id"], e["half_day"], True, "copied"))
-                except sqlite3.IntegrityError:
-                    results.append((t, e["provider_id"], e["half_day"], False, "conflict - skipped"))
-        return results
+        if entry_id is not None:
+            row = conn.execute("SELECT entry_date FROM schedule_entries WHERE id=?", (entry_id,)).fetchone()
+            if row is None:
+                raise ValueError("Source assignment no longer exists.")
+            source_date = row["entry_date"]
+        day = _real_date(source_date)
+        rows = conn.execute("SELECT * FROM schedule_entries WHERE entry_date=?", (day.isoformat(),)).fetchall()
+        assignments = group_assignments([dict(row) for row in rows])
+        if entry_id is not None:
+            assignments = [a for a in assignments if entry_id in a["entry_ids"]]
+        return assignments
+
+
+def _copy(assignments, target_dates):
+    return [add_entry(a["provider_id"], a["location_id"], target, a["half_day"], source="copy")
+            for target in target_dates for a in assignments]
+
+
+def copy_day(source_date, target_dates):
+    """Copy logical assignments; matching AM+PM rows stay atomic."""
+    try:
+        return _copy(_source_assignments(source_date=source_date), target_dates)
+    except ValueError as exc:
+        return [invalid_result(str(exc))]
+    except sqlite3.Error as exc:
+        return [WriteResult("", "error", f"Database error: {exc}")]
 
 
 def copy_entry(entry_id, target_dates):
-    """Copies a single existing schedule entry onto each date in target_dates.
-    Returns a list of (target_date, success, message)."""
-    with get_conn() as conn:
-        e = conn.execute(
-            "SELECT provider_id, location_id, half_day FROM schedule_entries WHERE id=?",
-            (entry_id,),
-        ).fetchone()
-        if e is None:
-            return []
-        results = []
-        for t in target_dates:
-            try:
-                conn.execute(
-                    "INSERT INTO schedule_entries (provider_id, location_id, entry_date, half_day, source) "
-                    "VALUES (?,?,?,?, 'copy')",
-                    (e["provider_id"], e["location_id"], t, e["half_day"]),
-                )
-                results.append((t, True, "copied"))
-            except sqlite3.IntegrityError:
-                results.append((t, False, "conflict - skipped"))
-        return results
+    """An ID from either half of a displayed full day copies both sessions."""
+    try:
+        return _copy(_source_assignments(entry_id=entry_id), target_dates)
+    except ValueError as exc:
+        return [invalid_result(str(exc))]
+    except sqlite3.Error as exc:
+        return [WriteResult("", "error", f"Database error: {exc}")]
 
 
 def add_recurring(provider_id, location_id, half_day, weekdays, start_date, end_date):
-    """weekdays: iterable of ints, Monday=0 .. Sunday=6 (matches date.weekday()).
-    start_date/end_date: date objects, inclusive.
-    Returns a list of (date_iso, success, message)."""
-    results = []
-    weekdays = set(weekdays)
-    with get_conn() as conn:
-        d = start_date
-        while d <= end_date:
-            if d.weekday() in weekdays:
-                try:
-                    conn.execute(
-                        "INSERT INTO schedule_entries (provider_id, location_id, entry_date, half_day, source) "
-                        "VALUES (?,?,?,?, 'recurring')",
-                        (provider_id, location_id, d.isoformat(), half_day),
-                    )
-                    results.append((d.isoformat(), True, "added"))
-                except sqlite3.IntegrityError:
-                    results.append((d.isoformat(), False, "conflict - skipped"))
-            d += timedelta(days=1)
-    return results
+    """Expand an inclusive range after validating the entire rule.
+
+    Each occurrence is one atomic assignment; conflicts skip that occurrence.
+    Rules themselves are not persisted.
+    """
+    try:
+        start, end = _real_date(start_date), _real_date(end_date)
+        if start > end:
+            raise ValueError("Recurrence start must be on or before its end.")
+        try:
+            days = list(weekdays)
+        except TypeError:
+            raise ValueError("Weekdays must be a nonempty collection of integers from 0 to 6.") from None
+        if not days or any(type(d) is not int or not 0 <= d <= 6 for d in days):
+            raise ValueError("Weekdays must be a nonempty collection of integers from 0 to 6.")
+        with get_conn() as conn:
+            _validate_assignment(conn, provider_id, location_id, start, half_day)
+        results = []
+        for offset in range((end - start).days + 1):
+            day = start + timedelta(days=offset)
+            if day.weekday() in days:
+                results.append(add_entry(provider_id, location_id, day, half_day, source="recurring"))
+        return results
+    except ValueError as exc:
+        return [invalid_result(str(exc), start_date, provider_id, half_day)]
+    except sqlite3.Error as exc:
+        return [WriteResult(str(start_date), "error", f"Database error: {exc}", provider_id, half_day)]
