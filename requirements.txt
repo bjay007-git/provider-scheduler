@@ -1,5 +1,6 @@
 streamlit==1.62.0
 streamlit-calendar==1.4.0
 streamlit_mic_recorder==0.0.8
+SpeechRecognition==3.17.0
 rapidfuzz==3.14.5
 dateparser==1.4.2

@@ -5,10 +5,11 @@ from datetime import date, timedelta
 
 import streamlit as st
 from streamlit_calendar import calendar as st_calendar
-from streamlit_mic_recorder import speech_to_text
+from streamlit_mic_recorder import mic_recorder
 
 import db
 import nlu_parser as nlu
+from voice import transcribe_wav
 from scheduling import assignment_label, calendar_events, group_assignments, result_counts, shift_month
 
 st.set_page_config(page_title="TiaMD Scheduler POC", layout="wide")
@@ -72,12 +73,30 @@ st.session_state.setdefault("transcript", "")
 # Clear before instantiating the keyed editor on the next run.
 if st.session_state.pop("clear_transcript_after_save", False):
     clear_transcript()
-heard = speech_to_text(
-    language="en-US", start_prompt="Start speaking", stop_prompt="Stop",
-    just_once=True, key="stt_widget",
+st.caption("Click Start speaking, allow microphone access, speak, then click Stop. "
+           "Google speech recognition requires an internet connection.")
+recording = mic_recorder(
+    start_prompt="Start speaking", stop_prompt="Stop",
+    format="wav", just_once=True, key="voice_recorder",
 )
-if heard:
-    st.session_state.transcript = heard
+if recording:
+    st.session_state.voice_audio = recording["bytes"]
+retry_voice = False
+if st.session_state.get("voice_audio"):
+    st.audio(st.session_state.voice_audio, format="audio/wav")
+    retry_voice = st.button("Retry transcription")
+if recording or retry_voice:
+    with st.spinner("Transcribing recording..."):
+        result = transcribe_wav(st.session_state.voice_audio)
+    st.session_state.voice_result = result
+    if result.text:
+        st.session_state.transcript = result.text
+voice_result = st.session_state.get("voice_result")
+if voice_result:
+    if voice_result.error:
+        st.error(voice_result.error)
+    else:
+        st.caption("Recording transcribed. Review the text below before saving.")
 st.text_area("Review before saving (edit anything the mic misheard):", key="transcript", height=80)
 btn_col, clear_col = st.columns([1, 5])
 confirm_clicked = btn_col.button("Confirm & Save", type="primary", disabled=not st.session_state.transcript.strip())

@@ -19,12 +19,19 @@ $stage1Source = (Get-Location).Path
 $stage1Python = Join-Path $stage1Source '.venv ProviderScheduler\Scripts\python.exe'
 $stage1Scratch = Join-Path ([System.IO.Path]::GetTempPath()) ('scheduler-stage1-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $stage1Scratch | Out-Null
-Copy-Item -LiteralPath app.py,db.py,nlu_parser.py,scheduling.py -Destination $stage1Scratch
+Copy-Item -LiteralPath app.py,db.py,nlu_parser.py,scheduling.py,voice.py -Destination $stage1Scratch
 Push-Location -LiteralPath $stage1Scratch
 try { & $stage1Python -m streamlit run app.py } finally { Pop-Location }
 ```
 
 Manual checklist (type transcripts or use the microphone):
+
+- On localhost, allow microphone access, click Start speaking, say a schedule,
+  then click Stop. The captured audio should be playable and the recognized
+  text should appear in the editor. Google speech recognition requires internet
+  access from the computer running Streamlit. Unclear speech and service errors
+  now show a reason; Retry transcription reuses the recorded audio. Recordings
+  are kept in the current session's memory, not in SQLite or local audio files.
 
 - Add `Khan at CGH 2026-12-01`. Expect one added assignment and one `SK-CGH`
   label without AM/PM after navigating to December 2026.

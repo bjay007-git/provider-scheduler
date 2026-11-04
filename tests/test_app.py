@@ -11,6 +11,7 @@ from streamlit.testing.v1 import AppTest
 import db
 import streamlit_calendar
 import streamlit_mic_recorder
+from voice import VoiceResult
 from scheduling import FULL_DAY
 
 APP = str(Path(__file__).resolve().parents[1] / 'app.py')
@@ -26,8 +27,8 @@ class StreamlitCase(unittest.TestCase):
         calendar_patch = patch.object(streamlit_calendar, 'calendar', return_value={})
         self.calendar = calendar_patch.start()
         self.addCleanup(calendar_patch.stop)
-        mic_patch = patch.object(streamlit_mic_recorder, 'speech_to_text', return_value=None)
-        mic_patch.start()
+        mic_patch = patch.object(streamlit_mic_recorder, 'mic_recorder', return_value=None)
+        self.mic = mic_patch.start()
         self.addCleanup(mic_patch.stop)
         db.init_db()
         db.seed_mock_data()
@@ -104,6 +105,37 @@ class StreamlitCase(unittest.TestCase):
         self.assertIn('1 added, 0 skipped, 0 failed', self.app.success[0].value)
         self.assertEqual(len(db.get_month_entries(2026, 12)), 4)
         self.assertEqual(len(self.calendar.call_args.kwargs['events']), 2)
+
+    def test_voice_transcript_remains_editable_without_retranscribing(self):
+        self.mic.return_value = {'bytes': b'test wav', 'id': 1}
+        with patch('voice.transcribe_wav', return_value=VoiceResult(text='Khan CGH tomorrow')) as transcribe:
+            self.app.run()
+            self.assert_clean()
+            self.assertEqual(self.app.text_area[0].value, 'Khan CGH tomorrow')
+            self.mic.return_value = None
+            self.app.text_area[0].input('Khan RVC tomorrow morning').run()
+            self.assertEqual(self.app.text_area[0].value, 'Khan RVC tomorrow morning')
+            self.button('Clear').click().run()
+            self.assertEqual(self.app.text_area[0].value, '')
+            transcribe.assert_called_once_with(b'test wav')
+
+    def test_voice_failure_is_visible_and_can_retry(self):
+        self.app.run()
+        self.app.text_area[0].input('Keep my draft').run()
+        self.mic.return_value = {'bytes': b'test wav', 'id': 1}
+        with patch('voice.transcribe_wav', return_value=VoiceResult(error='Speech service unavailable.')):
+            self.app.run()
+        self.assert_clean()
+        self.assertEqual(self.app.text_area[0].value, 'Keep my draft')
+        self.assertEqual(self.app.error[0].value, 'Speech service unavailable.')
+        self.mic.return_value = None
+        self.app.run()
+        self.assertEqual(self.app.error[0].value, 'Speech service unavailable.')
+        with patch('voice.transcribe_wav', return_value=VoiceResult(text='Khan CGH tomorrow')):
+            self.button('Retry transcription').click().run()
+        self.assert_clean()
+        self.assertEqual(self.app.text_area[0].value, 'Khan CGH tomorrow')
+        self.assertEqual(len(self.app.error), 0)
 
 
 if __name__ == '__main__':
