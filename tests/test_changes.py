@@ -210,6 +210,32 @@ class ChangeSetCase(unittest.TestCase):
             self.assertEqual(changes.approve(preview, self.inputs).status, 'rejected')
             self.assertEqual(self.stored(), before)
 
+    def test_conflict_reasons_describe_existing_single_and_full_day_bookings(self):
+        db.add_entry(1, 1, '2026-12-01', 'AM')
+        db.add_entry(1, 1, '2026-12-02', 'PM')
+        db.add_entry(1, 1, '2026-12-03', FULL_DAY)
+        db.add_entry(1, 1, '2026-12-04', 'AM')
+        db.add_entry(1, 2, '2026-12-04', 'PM')
+        for day, expected in [('2026-12-01', 'AM'), ('2026-12-02', 'PM'),
+                              ('2026-12-03', 'Full day (AM and PM)'), ('2026-12-04', 'AM and PM')]:
+            with self.subTest(day=day):
+                preview = self.preview([Assignment('ADD', 1, 1, day, FULL_DAY)])
+                self.assertEqual(preview.rows[0].status, 'conflict')
+                self.assertEqual(preview.rows[0].reason, f'Provider already booked for {expected}.')
+        self.assertTrue(self.preview([Assignment('ADD', 1, 1, '2026-12-01', 'PM')]).can_approve)
+        self.assertTrue(self.preview([Assignment('ADD', 1, 1, '2026-12-02', 'AM')]).can_approve)
+
+    def test_copy_conflict_reports_full_day_without_writes(self):
+        db.add_entry(1, 1, '2026-12-01', FULL_DAY)
+        db.add_entry(1, 1, '2026-12-06', FULL_DAY)
+        before = self.stored()
+        preview = changes.preview_copy('day', '2026-12-01', ['2026-12-06'], self.inputs)
+        self.assertFalse(preview.can_approve)
+        self.assertEqual(changes.preview_table(preview)[0]['Validation status'],
+                         'Conflict: Provider already booked for Full day (AM and PM).')
+        self.assertEqual(changes.approve(preview, self.inputs).status, 'rejected')
+        self.assertEqual(self.stored(), before)
+
 
 if __name__ == '__main__':
     unittest.main()

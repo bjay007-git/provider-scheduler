@@ -210,13 +210,18 @@ def _sessions(session):
 
 
 def _booking_conflict(conn, provider_id, entry_date, session):
-    for half in _sessions(session):
-        if conn.execute(
-            "SELECT 1 FROM schedule_entries WHERE provider_id=? AND entry_date=? AND half_day=?",
-            (provider_id, entry_date, half),
-        ).fetchone():
-            return f"Provider already booked for {half}."
-    return None
+    bookings = {row["half_day"]: row["location_id"] for row in conn.execute(
+        "SELECT half_day, location_id FROM schedule_entries WHERE provider_id=? AND entry_date=?",
+        (provider_id, entry_date),
+    )}
+    conflicts = [half for half in _sessions(session) if half in bookings]
+    if not conflicts:
+        return None
+    if set(bookings) == {"AM", "PM"}:
+        booked_session = "Full day (AM and PM)" if bookings["AM"] == bookings["PM"] else "AM and PM"
+    else:
+        booked_session = conflicts[0]
+    return f"Provider already booked for {booked_session}."
 
 
 def _insert_assignment(conn, provider_id, location_id, entry_date, session, source):
