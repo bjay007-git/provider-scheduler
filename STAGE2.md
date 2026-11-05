@@ -77,9 +77,16 @@ Open **http://127.0.0.1:8503**. Stop with Ctrl+C in the launch terminal.
    **Full day**. Nothing is yet on the calendar. Click **Edit**, change to
    December 2, reinterpret, then **Cancel**. Neither date should be scheduled.
 2. Interpret the December 1 input again and **Approve changes**. Expect one
-   added assignment; December's calendar shows `SK-CGH`. Rerun or navigate away
+   added assignment; the calendar grid must remain visible without a browser
+   refresh, and December's calendar shows `SK-CGH`. Rerun or navigate away
    and back: the result remains and no duplicate is inserted. Reinterpreting
    the same command now shows a conflict and disables approval.
+   Also try an ADD using the microphone: after approval, Start speaking must
+   remain visible, and the transcript, audio player, and Retry transcription
+   button must clear. Record a second command without refreshing the browser.
+   Rejected approvals and Cancel preserve the draft for correction; Clear
+   removes both the transcript and recording. Copy approvals preserve an
+   unrelated unsaved voice draft.
 3. Interpret `Khan at LKH 2026-12-03` and
    `Khan at CGH 2026-12-03 morning and afternoon` separately. Each must show an
    invalid reason and disabled approval. Correct the input; the old preview

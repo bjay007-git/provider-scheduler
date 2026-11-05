@@ -65,14 +65,24 @@ def navigate_month(delta=None):
 
 
 def clear_transcript():
+    """Clear the whole voice draft before rendering its widgets again."""
     st.session_state.transcript = ""
+    st.session_state.pop("voice_audio", None)
+    st.session_state.pop("voice_result", None)
+    old_key = f"voice_recorder_{st.session_state.get('mic_revision', 0)}"
+    st.session_state.pop(old_key + "_output", None)
+    st.session_state.mic_revision = st.session_state.get("mic_revision", 0) + 1
+    st.session_state.voice_revision = st.session_state.get("voice_revision", 0) + 1
 
 
 st.title("TiaMD Physician Scheduler — POC")
 st.caption("Speak or type an ADD schedule, review the transcript, interpret it, then approve the proposed changes. No session means Full day.")
 
 # Feedback is retained until the next operation, including through navigation.
-show_feedback()
+# Keep its changing child elements inside a stable block so adding feedback
+# cannot shift the microphone iframe's position in the Streamlit element tree.
+with st.container():
+    show_feedback()
 requested_preview = None
 st.subheader("1. Speak the schedule")
 st.caption('Try: “Khan at City General Hospital next Monday” or “Rao at Lakeside Hospital every Tuesday afternoon”.')
@@ -84,7 +94,8 @@ st.caption("Click Start speaking, allow microphone access, speak, then click Sto
            "Google speech recognition requires an internet connection.")
 recording = mic_recorder(
     start_prompt="Start speaking", stop_prompt="Stop",
-    format="wav", just_once=True, key="voice_recorder",
+    format="wav", just_once=True,
+    key=f"voice_recorder_{st.session_state.get('mic_revision', 0)}",
 )
 if recording:
     st.session_state.voice_audio = recording["bytes"]
@@ -130,16 +141,20 @@ assignments = group_assignments(db.get_month_entries(year, month))
 legend = " · ".join(f"{p['initials']} — {p['full_name']}" for p in PROVIDERS)
 st.caption(legend)
 # Installed streamlit-calendar 1.4.0 has no supported datesSet callback.
-# Remount on month changes so initialDate is applied; disable internal navigation.
+# Remount on month/data changes and successful approvals. Reusing the iframe
+# through an approval-triggered rerun can leave the calendar blank until reload.
+events = calendar_events(assignments, PROVIDER_COLOR)
+calendar_revision = st.session_state.get("calendar_revision", 0)
+calendar_key = f"scheduler_calendar_{year}_{month}_{calendar_revision}_{changes.input_signature(events)[:16]}"
 st_calendar(
-    events=calendar_events(assignments, PROVIDER_COLOR),
+    events=events,
     options={
         "initialView": "dayGridMonth", "initialDate": f"{year:04d}-{month:02d}-01",
         "headerToolbar": {"left": "title", "center": "", "right": ""},
         "showNonCurrentDates": False, "navLinks": False,
         "editable": False, "displayEventTime": False, "height": 650,
     },
-    callbacks=[], key=f"scheduler_calendar_{year}_{month}",
+    callbacks=[], key=calendar_key,
 )
 
 st.divider()
@@ -210,8 +225,16 @@ if pending:
         outcome = changes.approve(pending, source_inputs)
         st.session_state.pop("pending_changes", None)
         save_feedback(pending.operation, outcome.results, outcome.message, outcome.status)
-        if outcome.status == "approved" and pending.operation == "Add schedule":
-            st.session_state.clear_transcript_after_save = True
+        if outcome.status == "approved":
+            st.session_state.calendar_revision = st.session_state.get("calendar_revision", 0) + 1
+            if pending.operation == "Add schedule":
+                st.session_state.clear_transcript_after_save = True
+        # A successful ADD resets the entire draft on the next run. Other
+        # outcomes refresh the iframe while keeping any unsaved voice draft.
+        if not (outcome.status == "approved" and pending.operation == "Add schedule"):
+            old_key = f"voice_recorder_{st.session_state.get('mic_revision', 0)}"
+            st.session_state.pop(old_key + "_output", None)
+            st.session_state.mic_revision = st.session_state.get("mic_revision", 0) + 1
         st.rerun()
     if edit_col.button("Edit"):
         st.session_state.pop("pending_changes", None)

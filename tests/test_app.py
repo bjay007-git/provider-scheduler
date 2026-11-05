@@ -274,6 +274,126 @@ class StreamlitCase(unittest.TestCase):
         self.assertFalse(any(b.label == 'Approve changes' for b in self.app.button))
         self.assertEqual(len(db.get_month_entries(2026, 12)), 3)
 
+    def test_calendar_remounts_after_approval_and_then_stays_stable(self):
+        self.app.session_state['cal_year'] = 2026
+        self.app.session_state['cal_month'] = 12
+        self.interpret()
+        original_key = self.calendar.call_args.kwargs['key']
+        self.button('Edit').click().run()
+        self.assertEqual(self.calendar.call_args.kwargs['key'], original_key)
+        self.button('Interpret command').click().run()
+        self.assertEqual(self.calendar.call_args.kwargs['key'], original_key)
+        self.button('Approve changes').click().run()
+        self.assert_clean()
+        saved_key = self.calendar.call_args.kwargs['key']
+        self.assertNotEqual(saved_key, original_key)
+        self.assertEqual(self.calendar.call_args.kwargs['events'][0]['title'], 'SK-CGH')
+        self.assertEqual(self.calendar.call_args.kwargs['options']['initialDate'], '2026-12-01')
+        self.app.run()
+        self.assertEqual(self.calendar.call_args.kwargs['key'], saved_key)
+        self.assertEqual(len(db.get_month_entries(2026, 12)), 2)
+
+    def test_calendar_remounts_after_copy_and_external_data_changes(self):
+        db.add_entry(1, 1, '2026-12-01', FULL_DAY)
+        self.app.session_state['cal_year'] = 2026
+        self.app.session_state['cal_month'] = 12
+        self.app.run()
+        original_key = self.calendar.call_args.kwargs['key']
+        targets = next(m for m in self.app.multiselect if m.key.startswith('copyentry_targets'))
+        targets.select(date(2026, 12, 2)).run()
+        self.button('Preview copy assignment').click().run()
+        self.assertEqual(self.calendar.call_args.kwargs['key'], original_key)
+        self.button('Approve changes').click().run()
+        self.assert_clean()
+        copied_key = self.calendar.call_args.kwargs['key']
+        self.assertNotEqual(copied_key, original_key)
+        self.assertEqual(len(self.calendar.call_args.kwargs['events']), 2)
+        db.add_entry(2, 1, '2026-12-03', 'AM')
+        self.app.run()
+        self.assertNotEqual(self.calendar.call_args.kwargs['key'], copied_key)
+        self.assertEqual(len(self.calendar.call_args.kwargs['events']), 3)
+
+    def test_approval_outside_displayed_month_still_remounts_calendar(self):
+        self.app.session_state['cal_year'] = 2026
+        self.app.session_state['cal_month'] = 11
+        self.interpret()
+        original_key = self.calendar.call_args.kwargs['key']
+        self.assertEqual(self.calendar.call_args.kwargs['events'], [])
+        self.button('Approve changes').click().run()
+        self.assert_clean()
+        self.assertNotEqual(self.calendar.call_args.kwargs['key'], original_key)
+        self.assertEqual(self.calendar.call_args.kwargs['events'], [])
+        self.assertEqual(self.calendar.call_args.kwargs['options']['initialDate'], '2026-11-01')
+
+    def record_voice(self, text='Khan CGH 2026-12-01', audio=b'test wav', recording_id=1):
+        self.mic.return_value = {'bytes': audio, 'id': recording_id}
+        with patch('voice.transcribe_wav', return_value=VoiceResult(text=text)):
+            self.app.run()
+        self.mic.return_value = None
+        self.assert_clean()
+
+    def test_approved_voice_add_clears_recording_and_recreates_microphone(self):
+        self.record_voice()
+        recording_key = self.mic.call_args.kwargs['key']
+        self.assertTrue(any(b.label == 'Retry transcription' for b in self.app.button))
+        self.button('Interpret command').click().run()
+        self.button('Approve changes').click().run()
+        self.assert_clean()
+        self.assertNotEqual(self.mic.call_args.kwargs['key'], recording_key)
+        self.assertEqual(self.app.text_area[0].value, '')
+        self.assertFalse(any(b.label == 'Retry transcription' for b in self.app.button))
+        self.assertEqual(len(self.app.get('audio')), 0)
+        with self.assertRaises(KeyError):
+            self.app.session_state['voice_audio']
+        with self.assertRaises(KeyError):
+            self.app.session_state['voice_result']
+        self.assertEqual(len(db.get_month_entries(2026, 12)), 2)
+        fresh_key = self.mic.call_args.kwargs['key']
+        self.app.run()
+        self.assertEqual(self.mic.call_args.kwargs['key'], fresh_key)
+        self.record_voice('Khan RVC 2026-12-02 morning', b'second wav', 2)
+        self.assertEqual(self.app.text_area[0].value, 'Khan RVC 2026-12-02 morning')
+
+    def test_rejected_approval_keeps_recording_and_draft_for_correction(self):
+        self.record_voice()
+        original_key = self.mic.call_args.kwargs['key']
+        self.button('Interpret command').click().run()
+        db.add_entry(1, 2, '2026-12-01', 'PM')
+        self.button('Approve changes').click().run()
+        self.assert_clean()
+        self.assertNotEqual(self.mic.call_args.kwargs['key'], original_key)
+        self.assertEqual(self.app.text_area[0].value, 'Khan CGH 2026-12-01')
+        self.assertEqual(self.app.session_state['voice_audio'], b'test wav')
+        self.assertTrue(any(b.label == 'Retry transcription' for b in self.app.button))
+
+    def test_clear_removes_recording_but_cancel_preserves_it(self):
+        self.record_voice()
+        original_key = self.mic.call_args.kwargs['key']
+        self.button('Interpret command').click().run()
+        self.button('Cancel').click().run()
+        self.assertEqual(self.mic.call_args.kwargs['key'], original_key)
+        self.assertEqual(self.app.session_state['voice_audio'], b'test wav')
+        self.button('Clear').click().run()
+        self.assert_clean()
+        self.assertNotEqual(self.mic.call_args.kwargs['key'], original_key)
+        self.assertEqual(self.app.text_area[0].value, '')
+        self.assertFalse(any(b.label == 'Retry transcription' for b in self.app.button))
+
+    def test_copy_approval_refreshes_microphone_without_erasing_unsaved_draft(self):
+        db.add_entry(1, 1, '2026-12-01', FULL_DAY)
+        self.app.session_state['cal_year'] = 2026
+        self.app.session_state['cal_month'] = 12
+        self.record_voice('Khan CGH 2026-12-09')
+        original_key = self.mic.call_args.kwargs['key']
+        targets = next(m for m in self.app.multiselect if m.key.startswith('copyentry_targets'))
+        targets.select(date(2026, 12, 2)).run()
+        self.button('Preview copy assignment').click().run()
+        self.button('Approve changes').click().run()
+        self.assert_clean()
+        self.assertNotEqual(self.mic.call_args.kwargs['key'], original_key)
+        self.assertEqual(self.app.text_area[0].value, 'Khan CGH 2026-12-09')
+        self.assertEqual(self.app.session_state['voice_audio'], b'test wav')
+
 
 if __name__ == '__main__':
     unittest.main()
