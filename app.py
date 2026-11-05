@@ -123,6 +123,7 @@ clear_col.button("Clear", on_click=clear_transcript)
 
 if interpret_clicked:
     requested_preview = ("transcript",)
+transcript_preview_slot = st.container()
 
 st.divider()
 st.subheader("2. Month schedule")
@@ -168,6 +169,7 @@ with tab_day:
     )
     if st.button("Preview copy day", disabled=not day_targets):
         requested_preview = ("day", src, day_targets)
+    day_preview_slot = st.container()
 chosen_id, entry_targets = None, []
 with tab_entry:
     if not assignments:
@@ -186,6 +188,7 @@ with tab_entry:
         )
         if st.button("Preview copy assignment", disabled=not entry_targets):
             requested_preview = ("entry", chosen_id, entry_targets)
+    entry_preview_slot = st.container()
 
 # Evaluate all inputs after rendering every editor. A stale preview is discarded
 # before any approval button can execute, even if two widgets change together.
@@ -208,42 +211,48 @@ if requested_preview:
         pending = changes.preview_copy(*requested_preview, source_inputs)
     st.session_state.pending_changes = pending
 if pending:
-    st.divider()
-    st.subheader("4. Review proposed changes")
-    st.caption(pending.operation + ". Nothing is saved until you approve.")
-    totals = {status: sum(row.status == status for row in pending.rows) for status in ("valid", "conflict", "invalid")}
-    st.write(f"{len(pending.rows)} assignments: {totals['valid']} valid, "
-             f"{totals['conflict']} conflicts, {totals['invalid']} invalid.")
-    if pending.rows:
-        st.dataframe(changes.preview_table(pending), hide_index=True, width="stretch")
-    for issue in pending.issues:
-        st.error(issue)
-    if not pending.can_approve:
-        st.warning("Approval is blocked. Correct the inputs and generate a new preview.")
-    approve_col, edit_col, cancel_col = st.columns(3)
-    if approve_col.button("Approve changes", type="primary", disabled=not pending.can_approve):
-        outcome = changes.approve(pending, source_inputs)
-        st.session_state.pop("pending_changes", None)
-        save_feedback(pending.operation, outcome.results, outcome.message, outcome.status)
-        if outcome.status == "approved":
-            st.session_state.calendar_revision = st.session_state.get("calendar_revision", 0) + 1
-            if pending.operation == "Add schedule":
-                st.session_state.clear_transcript_after_save = True
-        # A successful ADD resets the entire draft on the next run. Other
-        # outcomes refresh the iframe while keeping any unsaved voice draft.
-        if not (outcome.status == "approved" and pending.operation == "Add schedule"):
-            old_key = f"voice_recorder_{st.session_state.get('mic_revision', 0)}"
-            st.session_state.pop(old_key + "_output", None)
-            st.session_state.mic_revision = st.session_state.get("mic_revision", 0) + 1
-        st.rerun()
-    if edit_col.button("Edit"):
-        st.session_state.pop("pending_changes", None)
-        st.session_state.review_notice = "Preview discarded. Edit the source inputs above, then generate a new preview."
-        st.rerun()
-    if cancel_col.button("Cancel"):
-        st.session_state.pop("pending_changes", None)
-        st.session_state.review_notice = "Proposed changes cancelled. Nothing was saved."
-        st.rerun()
+    preview_slot = {
+        "Add schedule": transcript_preview_slot,
+        "Copy day": day_preview_slot,
+        "Copy assignment": entry_preview_slot,
+    }[pending.operation]
+    with preview_slot:
+        st.divider()
+        st.subheader("4. Review proposed changes")
+        st.caption(pending.operation + ". Nothing is saved until you approve.")
+        totals = {status: sum(row.status == status for row in pending.rows) for status in ("valid", "conflict", "invalid")}
+        st.write(f"{len(pending.rows)} assignments: {totals['valid']} valid, "
+                 f"{totals['conflict']} conflicts, {totals['invalid']} invalid.")
+        if pending.rows:
+            st.dataframe(changes.preview_table(pending), hide_index=True, width="stretch")
+        for issue in pending.issues:
+            st.error(issue)
+        if not pending.can_approve:
+            st.warning("Approval is blocked. Correct the inputs and generate a new preview.")
+        approve_col, edit_col, cancel_col = st.columns(3)
+        if approve_col.button("Approve changes", type="primary", disabled=not pending.can_approve):
+            outcome = changes.approve(pending, source_inputs)
+            st.session_state.pop("pending_changes", None)
+            save_feedback(pending.operation, outcome.results, outcome.message, outcome.status)
+            if outcome.status == "approved":
+                st.session_state.calendar_revision = st.session_state.get("calendar_revision", 0) + 1
+                if pending.operation == "Add schedule":
+                    st.session_state.clear_transcript_after_save = True
+            # A successful ADD resets the entire draft on the next run. Other
+            # outcomes refresh the iframe while keeping any unsaved voice draft.
+            if not (outcome.status == "approved" and pending.operation == "Add schedule"):
+                old_key = f"voice_recorder_{st.session_state.get('mic_revision', 0)}"
+                st.session_state.pop(old_key + "_output", None)
+                st.session_state.mic_revision = st.session_state.get("mic_revision", 0) + 1
+            st.rerun()
+        if edit_col.button("Edit"):
+            st.session_state.pop("pending_changes", None)
+            st.session_state.review_notice = "Preview discarded. Edit the source inputs above, then generate a new preview."
+            st.rerun()
+        if cancel_col.button("Cancel"):
+            st.session_state.pop("pending_changes", None)
+            st.session_state.review_notice = "Proposed changes cancelled. Nothing was saved."
+            st.rerun()
 else:
     notice = st.session_state.pop("review_notice", None)
     if notice:
