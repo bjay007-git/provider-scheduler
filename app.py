@@ -8,7 +8,7 @@ from streamlit_calendar import calendar as st_calendar
 from streamlit_mic_recorder import mic_recorder
 
 import db
-import nlu_parser as nlu
+import changes
 from voice import transcribe_wav
 from scheduling import assignment_label, calendar_events, group_assignments, result_counts, shift_month
 
@@ -22,15 +22,21 @@ PALETTE = ["#1D9E75", "#378ADD", "#D85A30", "#B24BA6", "#C9971E", "#4C6EF5"]
 PROVIDER_COLOR = {p["id"]: PALETTE[i % len(PALETTE)] for i, p in enumerate(PROVIDERS)}
 
 
-def save_feedback(operation, results):
-    st.session_state.operation_feedback = (operation, results)
+def save_feedback(operation, results, message="", status="approved"):
+    st.session_state.operation_feedback = (operation, results, message, status)
 
 
 def show_feedback():
     feedback = st.session_state.get("operation_feedback")
     if feedback is None:
         return
-    operation, results = feedback
+    operation, results, *details = feedback
+    message, status = details if details else ("", "approved")
+    st.caption("Last operation result")
+    if message:
+        (st.error if status in ("rejected", "error") else st.info)(message)
+    if not results:
+        return
     counts = result_counts(results)
     summary = (f"{operation}: {counts['added']} added, {counts['skipped']} skipped, "
                f"{counts['failed']} failed (assignments).")
@@ -63,10 +69,11 @@ def clear_transcript():
 
 
 st.title("TiaMD Physician Scheduler — POC")
-st.caption("Speak or type an ADD schedule, review the transcript, and save. No session means Full day.")
+st.caption("Speak or type an ADD schedule, review the transcript, interpret it, then approve the proposed changes. No session means Full day.")
 
 # Feedback is retained until the next operation, including through navigation.
 show_feedback()
+requested_preview = None
 st.subheader("1. Speak the schedule")
 st.caption('Try: “Khan at City General Hospital next Monday” or “Rao at Lakeside Hospital every Tuesday afternoon”.')
 st.session_state.setdefault("transcript", "")
@@ -81,6 +88,7 @@ recording = mic_recorder(
 )
 if recording:
     st.session_state.voice_audio = recording["bytes"]
+    st.session_state.voice_revision = st.session_state.get("voice_revision", 0) + 1
 retry_voice = False
 if st.session_state.get("voice_audio"):
     st.audio(st.session_state.voice_audio, format="audio/wav")
@@ -99,28 +107,11 @@ if voice_result:
         st.caption("Recording transcribed. Review the text below before saving.")
 st.text_area("Review before saving (edit anything the mic misheard):", key="transcript", height=80)
 btn_col, clear_col = st.columns([1, 5])
-confirm_clicked = btn_col.button("Confirm & Save", type="primary", disabled=not st.session_state.transcript.strip())
+interpret_clicked = btn_col.button("Interpret command", type="primary", disabled=not st.session_state.transcript.strip())
 clear_col.button("Clear", on_click=clear_transcript)
 
-if confirm_clicked:
-    parsed = nlu.parse_transcript(st.session_state.transcript, PROVIDERS, LOCATIONS)
-    missing = [name for name, value in (("provider", parsed["provider_id"]),
-                                       ("location", parsed["location_id"])) if value is None]
-    if not parsed["is_recurring"] and parsed["entry_date"] is None:
-        missing.append("date")
-    if parsed["error"] or missing:
-        results = [db.invalid_result(parsed["error"] or f"Couldn't identify: {', '.join(missing)}. Edit and confirm again.")]
-    elif parsed["is_recurring"]:
-        today = date.today()
-        month_end = date(today.year, today.month, cal.monthrange(today.year, today.month)[1])
-        results = db.add_recurring(parsed["provider_id"], parsed["location_id"], parsed["half_day"],
-                                   parsed["weekdays"], today, month_end)
-    else:
-        results = [db.add_entry(parsed["provider_id"], parsed["location_id"], parsed["entry_date"], parsed["half_day"])]
-    save_feedback("Add schedule", results)
-    if any(r.status == "added" for r in results) and all(r.status == "added" for r in results):
-        st.session_state.clear_transcript_after_save = True
-    st.rerun()
+if interpret_clicked:
+    requested_preview = ("transcript",)
 
 st.divider()
 st.subheader("2. Month schedule")
@@ -160,9 +151,9 @@ with tab_day:
         "onto these date(s):", options=[src + timedelta(days=i) for i in range(1, 32)],
         format_func=lambda d: d.strftime("%a, %b %d"), key="copyday_targets",
     )
-    if st.button("Copy day", disabled=not day_targets):
-        save_feedback("Copy day", db.copy_day(src, day_targets))
-        st.rerun()
+    if st.button("Preview copy day", disabled=not day_targets):
+        requested_preview = ("day", src, day_targets)
+chosen_id, entry_targets = None, []
 with tab_entry:
     if not assignments:
         st.info("No assignments in the displayed month to copy from.")
@@ -178,6 +169,59 @@ with tab_entry:
             "onto these date(s):", options=[src_date + timedelta(days=i) for i in range(1, 32)],
             format_func=lambda d: d.strftime("%a, %b %d"), key=f"copyentry_targets_{year}_{month}_{chosen_id}",
         )
-        if st.button("Copy assignment", disabled=not entry_targets):
-            save_feedback("Copy assignment", db.copy_entry(chosen_id, entry_targets))
-            st.rerun()
+        if st.button("Preview copy assignment", disabled=not entry_targets):
+            requested_preview = ("entry", chosen_id, entry_targets)
+
+# Evaluate all inputs after rendering every editor. A stale preview is discarded
+# before any approval button can execute, even if two widgets change together.
+source_inputs = {
+    "transcript": st.session_state.transcript,
+    "voice_revision": st.session_state.get("voice_revision", 0),
+    "copy_day_source": src, "copy_day_targets": day_targets,
+    "copy_entry_id": chosen_id, "copy_entry_targets": entry_targets,
+    "calendar_month": (year, month), "today": today,
+}
+pending = st.session_state.get("pending_changes")
+if pending and pending.input_signature != changes.input_signature(source_inputs):
+    st.session_state.pop("pending_changes", None)
+    pending = None
+    st.info("Inputs changed. The previous preview was discarded; generate a new preview.")
+if requested_preview:
+    if requested_preview[0] == "transcript":
+        pending = changes.preview_add(st.session_state.transcript, PROVIDERS, LOCATIONS, source_inputs)
+    else:
+        pending = changes.preview_copy(*requested_preview, source_inputs)
+    st.session_state.pending_changes = pending
+if pending:
+    st.divider()
+    st.subheader("4. Review proposed changes")
+    st.caption(pending.operation + ". Nothing is saved until you approve.")
+    totals = {status: sum(row.status == status for row in pending.rows) for status in ("valid", "conflict", "invalid")}
+    st.write(f"{len(pending.rows)} assignments: {totals['valid']} valid, "
+             f"{totals['conflict']} conflicts, {totals['invalid']} invalid.")
+    if pending.rows:
+        st.dataframe(changes.preview_table(pending), hide_index=True, width="stretch")
+    for issue in pending.issues:
+        st.error(issue)
+    if not pending.can_approve:
+        st.warning("Approval is blocked. Correct the inputs and generate a new preview.")
+    approve_col, edit_col, cancel_col = st.columns(3)
+    if approve_col.button("Approve changes", type="primary", disabled=not pending.can_approve):
+        outcome = changes.approve(pending, source_inputs)
+        st.session_state.pop("pending_changes", None)
+        save_feedback(pending.operation, outcome.results, outcome.message, outcome.status)
+        if outcome.status == "approved" and pending.operation == "Add schedule":
+            st.session_state.clear_transcript_after_save = True
+        st.rerun()
+    if edit_col.button("Edit"):
+        st.session_state.pop("pending_changes", None)
+        st.session_state.review_notice = "Preview discarded. Edit the source inputs above, then generate a new preview."
+        st.rerun()
+    if cancel_col.button("Cancel"):
+        st.session_state.pop("pending_changes", None)
+        st.session_state.review_notice = "Proposed changes cancelled. Nothing was saved."
+        st.rerun()
+else:
+    notice = st.session_state.pop("review_notice", None)
+    if notice:
+        st.info(notice)

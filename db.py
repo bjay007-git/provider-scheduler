@@ -73,6 +73,13 @@ def init_db():
                 source TEXT DEFAULT 'voice',        -- voice | copy | recurring
                 UNIQUE(provider_id, entry_date, half_day)
             );
+
+            -- Durable submission receipts; written in the schedule transaction.
+            CREATE TABLE IF NOT EXISTS approved_batches (
+                batch_id TEXT PRIMARY KEY,
+                payload_hash TEXT NOT NULL,
+                approved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
 
@@ -198,6 +205,30 @@ def _validate_assignment(conn, provider_id, location_id, entry_date, session):
     return day
 
 
+def _sessions(session):
+    return ("AM", "PM") if session == FULL_DAY else (session,)
+
+
+def _booking_conflict(conn, provider_id, entry_date, session):
+    for half in _sessions(session):
+        if conn.execute(
+            "SELECT 1 FROM schedule_entries WHERE provider_id=? AND entry_date=? AND half_day=?",
+            (provider_id, entry_date, half),
+        ).fetchone():
+            return f"Provider already booked for {half}."
+    return None
+
+
+def _insert_assignment(conn, provider_id, location_id, entry_date, session, source):
+    """Shared insert primitive. Validation always runs in the caller's transaction."""
+    day = _validate_assignment(conn, provider_id, location_id, entry_date, session)
+    conn.executemany(
+        "INSERT INTO schedule_entries (provider_id, location_id, entry_date, half_day, source) "
+        "VALUES (?,?,?,?,?)",
+        [(provider_id, location_id, day.isoformat(), half, source) for half in _sessions(session)],
+    )
+
+
 def add_entry(provider_id, location_id, entry_date, half_day, source="voice"):
     """Write one logical assignment. A full day commits both sessions or neither.
 
@@ -210,20 +241,11 @@ def add_entry(provider_id, location_id, entry_date, half_day, source="voice"):
             # as the final safeguard. A raised exception rolls back on close.
             conn.execute("BEGIN IMMEDIATE")
             day = _validate_assignment(conn, provider_id, location_id, entry_date, half_day)
-            sessions = ("AM", "PM") if half_day == FULL_DAY else (half_day,)
-            for session in sessions:
-                if conn.execute(
-                    "SELECT 1 FROM schedule_entries WHERE provider_id=? AND entry_date=? AND half_day=?",
-                    (provider_id, day.isoformat(), session),
-                ).fetchone():
-                    return WriteResult(day.isoformat(), "conflict",
-                                       f"Provider already booked for {session}; assignment skipped.",
-                                       provider_id, half_day)
-            conn.executemany(
-                "INSERT INTO schedule_entries (provider_id, location_id, entry_date, half_day, source) "
-                "VALUES (?,?,?,?,?)",
-                [(provider_id, location_id, day.isoformat(), session, source) for session in sessions],
-            )
+            conflict = _booking_conflict(conn, provider_id, day.isoformat(), half_day)
+            if conflict:
+                return WriteResult(day.isoformat(), "conflict", conflict + " Assignment skipped.",
+                                   provider_id, half_day)
+            _insert_assignment(conn, provider_id, location_id, day, half_day, source)
         return WriteResult(day.isoformat(), "added", "Assignment added.", provider_id, half_day)
     except ValueError as exc:
         return invalid_result(str(exc), entry_date, provider_id, half_day)
@@ -297,30 +319,27 @@ def copy_entry(entry_id, target_dates):
         return [WriteResult("", "error", f"Database error: {exc}")]
 
 
-def add_recurring(provider_id, location_id, half_day, weekdays, start_date, end_date):
-    """Expand an inclusive range after validating the entire rule.
-
-    Each occurrence is one atomic assignment; conflicts skip that occurrence.
-    Rules themselves are not persisted.
-    """
+def _recurrence_dates(weekdays, start_date, end_date):
+    start, end = _real_date(start_date), _real_date(end_date)
+    if start > end:
+        raise ValueError("Recurrence start must be on or before its end.")
     try:
-        start, end = _real_date(start_date), _real_date(end_date)
-        if start > end:
-            raise ValueError("Recurrence start must be on or before its end.")
-        try:
-            days = list(weekdays)
-        except TypeError:
-            raise ValueError("Weekdays must be a nonempty collection of integers from 0 to 6.") from None
-        if not days or any(type(d) is not int or not 0 <= d <= 6 for d in days):
-            raise ValueError("Weekdays must be a nonempty collection of integers from 0 to 6.")
+        days = list(weekdays)
+    except TypeError:
+        raise ValueError("Weekdays must be a nonempty collection of integers from 0 to 6.") from None
+    if not days or any(type(d) is not int or not 0 <= d <= 6 for d in days):
+        raise ValueError("Weekdays must be a nonempty collection of integers from 0 to 6.")
+    return tuple(start + timedelta(days=offset) for offset in range((end - start).days + 1)
+                 if (start + timedelta(days=offset)).weekday() in days)
+
+
+def add_recurring(provider_id, location_id, half_day, weekdays, start_date, end_date):
+    """Stage 1 API: expand an inclusive range, returning each occurrence's result."""
+    try:
+        dates = _recurrence_dates(weekdays, start_date, end_date)
         with get_conn() as conn:
-            _validate_assignment(conn, provider_id, location_id, start, half_day)
-        results = []
-        for offset in range((end - start).days + 1):
-            day = start + timedelta(days=offset)
-            if day.weekday() in days:
-                results.append(add_entry(provider_id, location_id, day, half_day, source="recurring"))
-        return results
+            _validate_assignment(conn, provider_id, location_id, start_date, half_day)
+        return [add_entry(provider_id, location_id, day, half_day, source="recurring") for day in dates]
     except ValueError as exc:
         return [invalid_result(str(exc), start_date, provider_id, half_day)]
     except sqlite3.Error as exc:
