@@ -100,10 +100,18 @@ def parse_session(text):
     """Return explicit session, omission, or a validation error; never guess."""
     if re.search(UNSUPPORTED_SESSION, text, re.IGNORECASE):
         return None, "Unsupported session wording. Use morning, afternoon, or Full day."
-    found = {session for session, pattern in SESSION_PATTERNS.items()
-             if re.search(pattern, text, re.IGNORECASE)}
-    if len(found) > 1 or re.search(r"\b(?:not|except|excluding|neither)\b", text, re.IGNORECASE):
-        return None, "Contradictory or excluded sessions are unsupported. Use one session or Full day."
+    mentions = sorted((match.start(), match.end(), session)
+                      for session, pattern in SESSION_PATTERNS.items()
+                      for match in re.finditer(pattern, text, re.IGNORECASE))
+    found = {session for _, _, session in mentions}
+    if re.search(r"\b(?:not|except|excluding|neither|without)\b", text, re.IGNORECASE):
+        return None, "Excluded sessions are unsupported. Use morning, afternoon, or Full day."
+    if found == {"AM", "PM"} and len(mentions) == 2:
+        connector = text[mentions[0][1]:mentions[1][0]]
+        if re.fullmatch(r"\s*(?:and|&)\s*(?:the\s+)?", connector, re.IGNORECASE):
+            return FULL_DAY, None
+    if len(found) > 1:
+        return None, "Ambiguous or conflicting session wording. Use morning, afternoon, or Full day."
     return next(iter(found), None), None
 
 

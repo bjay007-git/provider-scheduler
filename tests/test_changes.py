@@ -198,6 +198,18 @@ class ChangeSetCase(unittest.TestCase):
         self.assertCountEqual(statuses, ['approved', 'already_applied'])
         self.assertEqual(len(self.stored()), 2)
 
+    def test_paired_sessions_use_full_day_atomicity_when_one_half_conflicts(self):
+        db.add_entry(1, 2, '2026-12-04', 'PM')
+        before = self.stored()
+        for phrase in ['morning and afternoon', 'AM and PM']:
+            preview = changes.preview_add(f'Khan CGH 2026-12-04 {phrase}', db.get_providers(),
+                                          db.get_locations(), self.inputs)
+            self.assertEqual(preview.rows[0].assignment.session, FULL_DAY)
+            self.assertEqual(preview.rows[0].status, 'conflict')
+            self.assertFalse(preview.can_approve)
+            self.assertEqual(changes.approve(preview, self.inputs).status, 'rejected')
+            self.assertEqual(self.stored(), before)
+
 
 if __name__ == '__main__':
     unittest.main()

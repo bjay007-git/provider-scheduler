@@ -5,6 +5,8 @@ transcript, interpreting it, previewing copies, Edit, and Cancel never write
 schedule entries. A preview lists each exact ADD assignment with official names,
 date, session, and validation status. Full day is one assignment backed by two
 rows. Recurrence still expands from today through the current month's end.
+An explicit "morning and afternoon" or "AM and PM" also means Full day.
+Alternatives such as "morning or afternoon" remain ambiguous and block approval.
 
 Approve changes is disabled for empty, invalid, conflicting, or overlapping
 batches. Changing any transcript/copy source/target, a new voice recording, or
@@ -88,7 +90,7 @@ Open **http://127.0.0.1:8503**. Stop with Ctrl+C in the launch terminal.
    removes both the transcript and recording. Copy approvals preserve an
    unrelated unsaved voice draft.
 3. Interpret `Khan at LKH 2026-12-03` and
-   `Khan at CGH 2026-12-03 morning and afternoon` separately. Each must show an
+   `Khan at CGH 2026-12-03 morning or afternoon` separately. Each must show an
    invalid reason and disabled approval. Correct the input; the old preview
    must disappear before a new one can be approved.
 4. Interpret a valid December 3 assignment. Before approving, change the

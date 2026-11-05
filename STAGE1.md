@@ -45,7 +45,7 @@ Manual checklist (type transcripts or use the microphone):
   Expect two separate labels. Try `Khan at CGH 2026-12-02` and verify the full-day
   request skips both halves without changing either existing assignment.
 - Try `Khan at LKH 2026-12-03`, an invalid ISO date such as `2026-13-01`, and
-  `Khan at CGH 2026-12-03 morning and afternoon`. Expect failures with reasons
+  `Khan at CGH 2026-12-03 morning or afternoon`. Expect failures with reasons
   and no added assignments. `evenings` and clock times should also fail.
 - Select the December 1 full-day assignment in the copy selector and copy it
   to December 3. Expect one added assignment and one combined label. Copy a

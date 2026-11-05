@@ -162,7 +162,9 @@ class ParserCase(unittest.TestCase):
                 self.assertEqual(parsed['entry_date'], date(2026, 11, 4))
 
     def test_reject_contradictions_unsupported_and_non_add(self):
-        for phrase in ['morning and afternoon', 'AM PM', 'full day morning', 'evenings',
+        for phrase in ['morning or afternoon', 'AM or PM', 'morning/afternoon', 'AM PM',
+                       'morning and afternoon only morning', 'not morning and afternoon',
+                       'full day morning', 'evenings',
                        'night', 'half day', 'midday', '9:00', '9-5', '8 AM', 'not morning',
                        'at 9', 'both halves', 'full time', '9\u20135', '9 o\u2019clock', '9 to 5']:
             with self.subTest(phrase=phrase):
@@ -176,6 +178,21 @@ class ParserCase(unittest.TestCase):
         self.assertTrue(parsed['is_recurring'])
         self.assertEqual(parsed['weekdays'], [0, 2])
         self.assertEqual(parsed['half_day'], 'PM')
+
+    def test_conjoined_sessions_mean_full_day(self):
+        for phrase in ['morning and afternoon', 'mornings and afternoons', 'AM and PM',
+                       'a.m. and p.m.', 'afternoon and morning', 'PM and AM',
+                       'morning & afternoon', 'both the morning and the afternoon',
+                       'first half and second half']:
+            with self.subTest(phrase=phrase):
+                parsed = self.parse(phrase)
+                self.assertIsNone(parsed['error'])
+                self.assertEqual(parsed['half_day'], FULL_DAY)
+                self.assertEqual(parsed['entry_date'], date(2026, 11, 4))
+        recurring = self.parse('every Monday and Wednesday mornings and afternoons')
+        self.assertTrue(recurring['is_recurring'])
+        self.assertEqual(recurring['weekdays'], [0, 2])
+        self.assertEqual(recurring['half_day'], FULL_DAY)
 
     def test_invalid_iso_date_is_not_reinterpreted(self):
         for value in ['2026-13-01', '2026-02-30', '2026-00-04']:

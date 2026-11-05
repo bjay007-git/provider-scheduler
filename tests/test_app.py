@@ -88,7 +88,7 @@ class StreamlitCase(unittest.TestCase):
 
     def test_invalid_session_fails_without_write_and_retains_feedback(self):
         self.app.run()
-        self.app.text_area[0].input('Khan CGH 2026-11-04 mornings and afternoons').run()
+        self.app.text_area[0].input('Khan CGH 2026-11-04 mornings or afternoons').run()
         self.button('Interpret command').click().run()
         self.assert_clean()
         self.assertTrue(self.button('Approve changes').disabled)
@@ -393,6 +393,17 @@ class StreamlitCase(unittest.TestCase):
         self.assertNotEqual(self.mic.call_args.kwargs['key'], original_key)
         self.assertEqual(self.app.text_area[0].value, 'Khan CGH 2026-12-09')
         self.assertEqual(self.app.session_state['voice_audio'], b'test wav')
+
+    def test_paired_sessions_preview_and_approve_as_one_full_day(self):
+        self.interpret('Khan CGH 2026-12-04 morning and afternoon')
+        self.assertFalse(self.button('Approve changes').disabled)
+        self.assertEqual(len(self.app.dataframe[0].value), 1)
+        self.assertEqual(self.app.dataframe[0].value.iloc[0]['Session'], 'Full day')
+        self.assertEqual(db.get_month_entries(2026, 12), [])
+        self.button('Approve changes').click().run()
+        self.assert_clean()
+        self.assertIn('1 added, 0 skipped, 0 failed', self.app.success[0].value)
+        self.assertEqual({row['half_day'] for row in db.get_month_entries(2026, 12)}, {'AM', 'PM'})
 
 
 if __name__ == '__main__':
