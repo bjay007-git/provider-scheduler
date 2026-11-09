@@ -23,7 +23,7 @@ $stage1Source = (Get-Location).Path
 $stage1Python = Join-Path $stage1Source '.venv ProviderScheduler\Scripts\python.exe'
 $stage1Scratch = Join-Path ([System.IO.Path]::GetTempPath()) ('scheduler-stage1-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $stage1Scratch | Out-Null
-Copy-Item -LiteralPath app.py,db.py,nlu_parser.py,scheduling.py,voice.py,changes.py -Destination $stage1Scratch
+Copy-Item -LiteralPath app.py,db.py,nlu_parser.py,command_parser.py,scheduling.py,voice.py,changes.py -Destination $stage1Scratch
 Push-Location -LiteralPath $stage1Scratch
 try { & $stage1Python -m streamlit run app.py } finally { Pop-Location }
 ```

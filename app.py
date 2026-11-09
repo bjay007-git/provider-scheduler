@@ -85,7 +85,7 @@ with st.container():
     show_feedback()
 requested_preview = None
 st.subheader("1. Speak the schedule")
-st.caption('Try: “Khan at City General Hospital next Monday” or “Rao at Lakeside Hospital every Tuesday afternoon”.')
+st.caption('Try: “Dr. Khan and Dr. Rao, City General, weekday mornings, rest of the month.”')
 st.session_state.setdefault("transcript", "")
 # Clear before instantiating the keyed editor on the next run.
 if st.session_state.pop("clear_transcript_after_save", False):

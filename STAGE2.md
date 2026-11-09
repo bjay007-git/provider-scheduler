@@ -60,7 +60,7 @@ $stage2Source = (Get-Location).Path
 $stage2Python = Join-Path $stage2Source '.venv ProviderScheduler\Scripts\python.exe'
 $stage2Scratch = Join-Path ([System.IO.Path]::GetTempPath()) ('scheduler-stage2-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $stage2Scratch | Out-Null
-Copy-Item -LiteralPath app.py,db.py,nlu_parser.py,scheduling.py,voice.py,changes.py -Destination $stage2Scratch
+Copy-Item -LiteralPath app.py,db.py,nlu_parser.py,command_parser.py,scheduling.py,voice.py,changes.py -Destination $stage2Scratch
 Write-Output "Disposable test directory: $stage2Scratch"
 Push-Location -LiteralPath $stage2Scratch
 try {

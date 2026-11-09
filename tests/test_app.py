@@ -92,11 +92,11 @@ class StreamlitCase(unittest.TestCase):
         self.button('Interpret command').click().run()
         self.assert_clean()
         self.assertTrue(self.button('Approve changes').disabled)
-        self.assertIn('Invalid:', self.app.dataframe[0].value.iloc[0]['Validation status'])
+        self.assertIn('Ambiguous', self.app.error[0].value)
         self.assertEqual(db.get_month_entries(2026, 11), [])
         self.app.run()
         self.assertTrue(self.button('Approve changes').disabled)
-        self.assertIn('Invalid:', self.app.dataframe[0].value.iloc[0]['Validation status'])
+        self.assertIn('Ambiguous', self.app.error[0].value)
 
     def test_copy_displayed_full_day_as_one_assignment(self):
         db.add_entry(1, 1, '2026-12-01', FULL_DAY)
@@ -404,6 +404,37 @@ class StreamlitCase(unittest.TestCase):
         self.assert_clean()
         self.assertIn('1 added, 0 skipped, 0 failed', self.app.success[0].value)
         self.assertEqual({row['half_day'] for row in db.get_month_entries(2026, 12)}, {'AM', 'PM'})
+
+    def test_multi_provider_date_list_uses_existing_preview_and_approval(self):
+        self.app.session_state['cal_year'] = 2027
+        self.app.session_state['cal_month'] = 1
+        self.interpret('Dr. Khan and Dr. Rao, City General, 2027-01-04 and 2027-01-05')
+        table = self.app.dataframe[0].value
+        self.assertEqual(len(table), 4)
+        self.assertEqual(set(table['Provider']), {'Dr. Sarah Khan', 'Dr. Michael Rao'})
+        self.assertEqual(set(table['Session']), {'Full day'})
+        self.assertEqual(db.get_month_entries(2027, 1), [])
+        self.button('Approve changes').click().run()
+        self.assert_clean()
+        self.assertIn('4 added, 0 skipped, 0 failed', self.app.success[0].value)
+        self.assertEqual(len(db.get_month_entries(2027, 1)), 8)
+        self.assertEqual(len(self.calendar.call_args.kwargs['events']), 4)
+
+    def test_partial_provider_command_has_no_approvable_partial_preview(self):
+        self.interpret('Khan and Unknown at CGH 2027-01-04')
+        self.assertTrue(self.button('Approve changes').disabled)
+        self.assertIn('No partial provider list', self.app.error[0].value)
+        self.assertEqual(len(self.app.dataframe), 0)
+        self.assertEqual(db.get_month_entries(2027, 1), [])
+
+    def test_multi_provider_invalid_mapping_blocks_all_dates(self):
+        self.interpret('Khan and Rao at RVC 2027-01-04 through 2027-01-05 mornings')
+        self.assertTrue(self.button('Approve changes').disabled)
+        table = self.app.dataframe[0].value
+        self.assertEqual(len(table), 4)
+        self.assertEqual(sum(value.startswith('Invalid:') for value in table['Validation status']), 2)
+        self.button('Cancel').click().run()
+        self.assertEqual(db.get_month_entries(2027, 1), [])
 
 
 if __name__ == '__main__':

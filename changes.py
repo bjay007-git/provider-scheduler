@@ -4,7 +4,6 @@ All entry points (including future parsers) produce the same change set. Only
 ADD is currently supported; no command interpretation can execute a write.
 """
 
-import calendar
 from dataclasses import asdict, dataclass
 from datetime import date
 import hashlib
@@ -13,7 +12,7 @@ import sqlite3
 from uuid import uuid4
 
 import db
-import nlu_parser as nlu
+import command_parser
 from scheduling import FULL_DAY, group_assignments
 
 
@@ -105,31 +104,29 @@ def _review(conn, assignments, error=""):
 def preview_assignments(assignments, operation, inputs, error=""):
     """Common adapter for current and future command interpreters; no writes."""
     try:
+        assignments = tuple(assignments)
+        limit = command_parser.assignment_limit()
+        if len(assignments) > limit:
+            raise ValueError(command_parser.limit_message(limit))
         with db.get_conn() as conn:
             conn.execute("BEGIN")
             rows = _review(conn, tuple(assignments), error)
         return ChangeSet(str(uuid4()), operation, input_signature(inputs), rows,
                          () if rows else (error or "No assignments were proposed.",))
-    except sqlite3.Error as exc:
-        return ChangeSet(str(uuid4()), operation, input_signature(inputs), (), (f"Database error: {exc}",))
+    except (sqlite3.Error, ValueError) as exc:
+        message = f"Database error: {exc}" if isinstance(exc, sqlite3.Error) else str(exc)
+        return ChangeSet(str(uuid4()), operation, input_signature(inputs), (), (message,))
 
 
 def preview_add(transcript, providers, locations, inputs, today=None):
     today = today or date.today()
-    parsed = nlu.parse_transcript(transcript, providers, locations, today=today)
-    missing = [label for key, label in (("provider_id", "provider"), ("location_id", "location"))
-               if parsed[key] is None]
-    if not parsed["is_recurring"] and parsed["entry_date"] is None:
-        missing.append("date")
-    error = parsed["error"] or (f"Couldn't identify: {', '.join(missing)}." if missing else "")
-    source = "recurring" if parsed["is_recurring"] else "voice"
-    dates = [parsed["entry_date"].isoformat() if parsed["entry_date"] else ""]
-    if parsed["is_recurring"]:
-        end = date(today.year, today.month, calendar.monthrange(today.year, today.month)[1])
-        dates = [day.isoformat() for day in db._recurrence_dates(parsed["weekdays"], today, end)]
-    assignments = tuple(Assignment("ADD", parsed["provider_id"], parsed["location_id"], day,
-                                   parsed["half_day"], source) for day in dates)
-    return preview_assignments(assignments, "Add schedule", inputs, error)
+    parsed = command_parser.parse_command(transcript, providers, locations, reference_date=today)
+    if parsed.error:
+        return preview_assignments((), "Add schedule", inputs, parsed.error)
+    source = "recurring" if parsed.recurring else "voice"
+    assignments = tuple(Assignment("ADD", provider_id, parsed.location_id, day.isoformat(), parsed.session, source)
+                        for provider_id in parsed.provider_ids for day in parsed.dates)
+    return preview_assignments(assignments, "Add schedule", inputs)
 
 
 def preview_recurrence(provider_id, location_id, session, weekdays, start, end, inputs):
@@ -169,12 +166,17 @@ def preview_copy(kind, value, targets, inputs):
     operation = "Copy day" if kind == "day" else "Copy assignment"
     value = value.isoformat() if type(value) is date else value
     try:
+        limit = command_parser.assignment_limit()
         with db.get_conn() as conn:
             conn.execute("BEGIN")
             source, snapshot = _copy_source(conn, kind, value)
-            assignments = tuple(Assignment("ADD", a["provider_id"], a["location_id"],
-                                           target.isoformat() if type(target) is date else target,
-                                           a["half_day"], "copy") for target in targets for a in source)
+            assignments = []
+            for target in targets:
+                for a in source:
+                    assignments.append(Assignment("ADD", a["provider_id"], a["location_id"],
+                                                  target.isoformat() if type(target) is date else target, a["half_day"], "copy"))
+                    if len(assignments) > limit:
+                        raise ValueError(command_parser.limit_message(limit))
             rows = _review(conn, assignments)
         return ChangeSet(str(uuid4()), operation, input_signature(inputs), rows,
                          () if rows else ("No source assignments or target dates to copy.",), kind, value, snapshot)
@@ -212,6 +214,9 @@ def approve(change_set, current_inputs):
                 if receipt["payload_hash"] == change_set.payload_hash:
                     return ApprovalResult("already_applied", "This batch was already approved; nothing was added again.")
                 return ApprovalResult("rejected", "Batch identity changed. Generate a new preview.")
+            limit = command_parser.assignment_limit()
+            if len(change_set.rows) > limit:
+                return ApprovalResult("rejected", command_parser.limit_message(limit) + " Generate a new preview.")
             if change_set.source_kind:
                 try:
                     _, current_source = _copy_source(conn, change_set.source_kind, change_set.source_value)
