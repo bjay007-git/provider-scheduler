@@ -220,7 +220,7 @@ class StreamlitCase(unittest.TestCase):
 
     def test_recurring_preview_can_cancel_then_approve(self):
         self.interpret('Ortiz CGH every Monday afternoons')
-        proposed_dates = list(self.app.dataframe[0].value['Date'])
+        proposed_dates = [row.assignment.entry_date for row in self.app.session_state['pending_changes'].rows]
         self.assertTrue(proposed_dates)
         self.assertEqual(db.get_month_entries(date.today().year, date.today().month), [])
         self.button('Cancel').click().run()
@@ -426,6 +426,32 @@ class StreamlitCase(unittest.TestCase):
         self.assertIn('No partial provider list', self.app.error[0].value)
         self.assertEqual(len(self.app.dataframe), 0)
         self.assertEqual(db.get_month_entries(2027, 1), [])
+
+    def test_mixed_date_sessions_render_written_dates_and_approve_exact_batch(self):
+        self.app.session_state['cal_year'] = 2027
+        self.app.session_state['cal_month'] = 1
+        self.interpret('Khan CGH 01/06/2027 morning and 2027-01-07 afternoon')
+        table = self.app.dataframe[0].value
+        self.assertEqual(list(table['Date']), ['January 06, 2027', 'January 07, 2027'])
+        self.assertEqual(list(table['Session']), ['AM', 'PM'])
+        self.assertEqual(db.get_month_entries(2027, 1), [])
+        self.button('Cancel').click().run()
+        self.assertEqual(db.get_month_entries(2027, 1), [])
+        self.button('Interpret command').click().run()
+        self.button('Approve changes').click().run()
+        self.assert_clean()
+        self.assertIn('2 added, 0 skipped, 0 failed', self.app.success[0].value)
+        self.assertEqual([(r['entry_date'], r['half_day']) for r in db.get_month_entries(2027, 1)],
+                         [('2027-01-06', 'AM'), ('2027-01-07', 'PM')])
+
+    def test_one_mixed_clause_conflict_disables_whole_batch_approval(self):
+        db.add_entry(1, 2, '2027-01-07', 'PM')
+        self.interpret('Khan CGH 01/06/2027 morning and 2027-01-07 afternoon')
+        table = self.app.dataframe[0].value
+        self.assertTrue(table.iloc[0]['Validation status'].startswith('Valid:'))
+        self.assertTrue(table.iloc[1]['Validation status'].startswith('Conflict:'))
+        self.assertTrue(self.button('Approve changes').disabled)
+        self.assertEqual(len(db.get_month_entries(2027, 1)), 1)
 
     def test_multi_provider_invalid_mapping_blocks_all_dates(self):
         self.interpret('Khan and Rao at RVC 2027-01-04 through 2027-01-05 mornings')

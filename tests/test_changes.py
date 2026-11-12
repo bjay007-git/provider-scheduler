@@ -38,7 +38,7 @@ class ChangeSetCase(unittest.TestCase):
         self.assertTrue(preview.can_approve)
         self.assertEqual(changes.preview_table(preview)[0], {
             'Action': 'ADD', 'Provider': 'Dr. Sarah Khan', 'Location': 'City General Hospital',
-            'Date': '2026-12-01', 'Session': 'Full day', 'Validation status': 'Valid: Ready for approval.'})
+            'Date': 'December 01, 2026', 'Session': 'Full day', 'Validation status': 'Valid: Ready for approval.'})
         self.assertEqual(self.stored(), [])
         self.assertEqual(self.stored('approved_batches'), [])
 

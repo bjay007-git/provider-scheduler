@@ -1,8 +1,8 @@
 # Stage 3: shared multi-provider ADD patterns
 
 The transcript editor now uses a conservative deterministic parser. One command
-can name multiple providers sharing **one location, one session pattern, and
-one date pattern**. The whole command must be understood; unknown providers,
+can name multiple providers sharing **one location**, with a shared date/session
+pattern or explicit date-first session clauses. The whole command must be understood; unknown providers,
 ambiguous names, uncertain spelling matches, and unsupported clauses require
 correction. No recognized subset is silently accepted.
 
@@ -27,6 +27,10 @@ receipts remain in use. Copy previews use those same safeguards.
 | `Ortiz CGH every Monday and Wednesday afternoons` | Matching weekdays from today to month-end |
 | `Khan CGH 2028-02-28 to 2028-03-01` | Three Full day assignments, including leap day |
 | `Khan CGH tomorrow afternoon and morning` | One Full day assignment |
+| `Khan CGH 01/06/2027` | January 6, 2027, Full day; slash dates are always month first |
+| `Khan CGH 2027-01-06 morning and 2027-01-07 afternoon` | January 6 AM and January 7 PM; sessions stay attached to their dates |
+| `Khan CGH 01/07/2027 afternoon and 01/06/2027 morning` | Same two assignments in reversed clause order |
+| `Khan CGH 2027-01-06; 2027-01-07 afternoon` | January 6 Full day and January 7 PM; semicolon makes the omitted session explicit |
 
 Provider lists accept `and`, commas, or `&`; full names, unique surnames, and
 unique initials resolve exactly. Location names/acronyms and unique name stems
@@ -38,8 +42,17 @@ to an exact master-data alias before an assignment is proposed.
 Sessions preserve the established behavior: omitted means Full day; explicit
 morning/AM and afternoon/PM means Full day, including reversed order and plurals.
 `morning or afternoon` requires clarification. Full day counts once and saves
-AM and PM rows together. Different locations or session patterns must be
-interpreted and approved as separate commands.
+AM and PM rows together. Date-first clauses may have different sessions, with
+the same providers and location inherited by each clause. Different locations
+and per-provider session patterns require separate commands.
+
+Attach sessions after the date or date list. Separate dated clauses with `and`,
+a comma, or a semicolon. A session followed by another dated clause does not
+apply to that next clause. Omitted sessions in clearly separated clauses mean
+Full day. A plain date list followed by one session pattern still shares that
+pattern: `2027-01-06 and 2027-01-07 afternoons` means PM on both dates. Use
+`2027-01-06; 2027-01-07 afternoons` for Full day on the first date and PM on the
+second. Unclear associations or unsupported leftovers block the whole command.
 
 ## Deterministic date rules
 
@@ -59,14 +72,20 @@ interpreted and approved as separate commands.
 - Explicit lists support ISO dates, repeated written dates, and written month
   shorthand such as `December 1, 3 and 5, 2026`. Range endpoints are inclusive;
   repeated dates and providers are deduplicated before assignment counting.
-- Use zero-padded `YYYY-MM-DD` or a written month name. Slash dates and other
-  numeric date formats are rejected rather than assigned a guessed locale.
+- Use `MM/DD/YYYY`, zero-padded `YYYY-MM-DD`, or a written month name.
+  Slash dates always mean month/day/year: `01/06/2027` is January 6, 2027.
+  There is no DD/MM/YYYY fallback: `13/01/2027` is invalid. Impossible dates,
+  invalid months and invalid leap days are rejected using the same real-date
+  validation for every format. Other numeric formats remain unsupported.
+  Preview dates use written months and four-digit years (e.g. `January 06, 2027`);
+  frozen assignments, database storage and calendar event dates remain ISO.
   Invalid dates, reversed/incomplete ranges, unmatched clauses, and ranges with
   no matching weekdays all block approval with an explanation.
 - This is a documented grammar, not general language understanding. Ordinal
   suffixes (`December 4th, 2026`) are accepted; spell-out day numbers, arbitrary
-  time ranges, exceptions, multiple location clauses, and per-provider or
-  per-date mixed sessions are unsupported. DELETE/MODIFY and voice COPY commands
+  time ranges, exceptions, multiple location clauses, and per-provider mixed
+  sessions are unsupported. Per-date sessions use the explicit clauses above.
+  DELETE/MODIFY and voice COPY commands
   remain rejected; existing copy controls are available.
 
 ## Configurable expansion limit
@@ -139,8 +158,8 @@ remain untouched. Ctrl+C stops this server.
    block the whole four-assignment batch. Cancel.
 4. Interpret each separately: `Khan and Unknown CGH tomorrow`,
    `Kahn and Rao CGH tomorrow`, `Khan CGH and RVC tomorrow`,
-   `Khan CGH 2027-01-06 morning and 2027-01-07 afternoon`,
-   `Khan CGH 01/06/2027`, and `Khan CGH 2027-01-07 to 2027-01-06`.
+   `Khan CGH 2027-01-06 morning and afternoon 2027-01-07`,
+   `Khan CGH 13/01/2027`, and `Khan CGH 2027-01-07 to 2027-01-06`.
    Each must require correction and permit no approval. Existing duplicated
    surname/location aliases are also blocked; synthetic ambiguities are covered
    by automated tests without modifying master data manually.
@@ -159,7 +178,12 @@ remain untouched. Ctrl+C stops this server.
    Stage 2. No saved recurrence rules, month duplication, DELETE/MODIFY, new date
    picker, or LLM integration is part of this stage.
 
-## Verification run: 2026-11-09 through 2026-11-12
+## Verification run: 2026-11-09 through 2026-11-12 (original Stage 3 requirements)
+
+This historical run preceded the month-first and mixed-clause changes below.
+Its rejection results for valid slash dates and explicit mixed clauses describe
+the previous requirements; use the current checklist above and the addendum
+below for the new behavior.
 
 - Branch `feature/scheduling-enhancements`; implementation commit `d47c1b3`.
 - Actual reference date reported by the app's Python process: **2026-11-09**.
@@ -286,3 +310,57 @@ of implementation commit `d47c1b3`.
   databases. Browser checks were performed by the user, not browser automation.
   Synthetic name ambiguity and replay of the same batch token remain
   automated-only coverage; they are not claimed as browser-tested.
+
+## Parser requirements addendum: month-first dates and dated sessions
+
+This change is separate from Stage 4. At implementation start there was no
+Stage 4 work in the working tree. Existing preview validation, transaction
+boundaries, approval receipts, and source-input invalidation are reused.
+
+The current manual checklist replaces the old rejection expectations for valid
+MM/DD/YYYY dates and explicit mixed date/session clauses. Prior verification
+results above remain historical; the following browser checks are **pending**.
+Use a fresh disposable source-only launch from the instructions above, with
+the updated files. The previously running instance uses an older source copy.
+Do not use the original database. These explicit dates do not depend on today.
+
+1. Interpret `Khan CGH 01/06/2027`. Expect one Full day assignment displayed as
+   **January 06, 2027**. Interpret ISO and written-month versions separately;
+   expect identical date/session/provider/location. Cancel each preview.
+2. Interpret `Khan CGH 2027-01-06 morning and 2027-01-07 afternoon`.
+   Expect two logical assignments: **January 06, 2027 AM** and
+   **January 07, 2027 PM**, official provider/location names, no writes.
+   Cancel. Repeat with slash dates and reversed clause order:
+   `Khan CGH 01/07/2027 afternoon and 01/06/2027 morning`.
+   Expect the same two assignments. Edit/Cancel must still save nothing.
+3. Interpret `Khan CGH 01/06/2027 morning and afternoon and 01/07/2027`.
+   Expect two Full day assignments, including the clause with omitted session.
+   Cancel. Interpret `Khan CGH 01/06/2027; 01/07/2027 afternoon`.
+   Expect January 6 Full day and January 7 PM. Cancel.
+4. Separately try `Khan CGH 13/01/2027`, `Khan CGH 04/31/2027`, and
+   `Khan CGH 02/29/2027`: all must block approval, never swap month/day.
+   `Khan CGH 02/29/2028` must preview February 29, 2028 Full day. Cancel.
+5. Try `Khan CGH 01/06/2027 morning and afternoon 01/07/2027` and
+   `Khan CGH 01/06/2027 morning and 01/07/2027 afternoon except holidays`.
+   Each must block the complete command; no recognized subset may be approved.
+6. On the fresh database, preview `Khan CGH 01/06/2027 morning and
+   2027-01-07 afternoon` in tab A. In tab B approve
+   `Khan RVC 01/07/2027 afternoon`. Tab A approval must reject the whole batch,
+   require a new review, and add no January 6 row. Regenerate: January 6 is valid,
+   January 7 conflicts, and approval remains disabled for both assignments.
+7. Interpret `Khan CGH 01/08/2027 morning and 01/09/2027 afternoon`.
+   Approve once: expect two added logical assignments/two database rows, exact
+   AM/PM calendar labels and persistent feedback. Reinterpret: two conflicts,
+   approval disabled, no duplicate rows. Recheck microphone/draft reset.
+
+Automated coverage uses temporary databases and fixed reference dates. It
+includes both clause orders and date formats, retained ISO/written formats,
+leap-year rules, same-date combined sessions, omitted sessions, deduplication,
+limits, unsupported/unclear clauses, exact preview text, no interpretation or
+cancellation writes, changed inputs, one-assignment conflicts, stale conflicts,
+whole-batch rollback, and same-token duplicate protection. Browser results
+for this addendum are not claimed until the user performs the checks.
+
+Validation: **107 automated tests passed**, including all Stage 1/2/3
+regressions and Streamlit AppTest checks (calendar/microphone widgets stubbed).
+No new live-browser checks were performed for this addendum.

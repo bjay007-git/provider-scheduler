@@ -124,8 +124,8 @@ def preview_add(transcript, providers, locations, inputs, today=None):
     if parsed.error:
         return preview_assignments((), "Add schedule", inputs, parsed.error)
     source = "recurring" if parsed.recurring else "voice"
-    assignments = tuple(Assignment("ADD", provider_id, parsed.location_id, day.isoformat(), parsed.session, source)
-                        for provider_id in parsed.provider_ids for day in parsed.dates)
+    assignments = tuple(Assignment("ADD", provider_id, parsed.location_id, day.isoformat(), session, source)
+                        for provider_id in parsed.provider_ids for day, session in parsed.date_sessions)
     return preview_assignments(assignments, "Add schedule", inputs)
 
 
@@ -186,9 +186,17 @@ def preview_copy(kind, value, targets, inputs):
 
 def preview_table(change_set):
     return [{"Action": row.assignment.action, "Provider": row.provider_name, "Location": row.location_name,
-             "Date": row.assignment.entry_date or "Unrecognized date",
+             "Date": _preview_date(row.assignment.entry_date),
              "Session": "Full day" if row.assignment.session == FULL_DAY else (row.assignment.session or "Unrecognized session"),
              "Validation status": f"{row.status.capitalize()}: {row.reason}"} for row in change_set.rows]
+
+
+def _preview_date(value):
+    try:
+        day = date.fromisoformat(value)
+        return f"{day:%B %d}, {day.year:04d}"
+    except (ValueError, TypeError):
+        return value or "Unrecognized date"
 
 
 def _blocked_results(rows):

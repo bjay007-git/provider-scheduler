@@ -1,4 +1,4 @@
-"""Conservative ADD grammar: one shared location/session/date pattern.
+"""Conservative ADD grammar: shared providers/location with dated session clauses.
 
 No writes and no dateparser guesses. Every non-filler token must be consumed.
 The explicit reference date controls all relative and yearless dates.
@@ -41,6 +41,8 @@ class Command:
     session: str | None = None
     recurring: bool = False
     error: str = ""
+    # Authoritative expansion; session is only a summary for uniform patterns.
+    date_sessions: tuple[tuple[date, str], ...] = ()
 
 
 def _normal_name(text):
@@ -136,8 +138,12 @@ WRITTEN_PATTERN = re.compile(
     r"(?:(?:\s*,\s*|\s+)(?P<year>\d{4})\b)?", re.I)
 DAY_FIRST_PATTERN = re.compile(rf"\b(?P<day>{DAY_PATTERN})\s+(?P<month>{MONTH_PATTERN})(?:(?:\s*,\s*|\s+)(?P<year>\d{{4}})\b)?", re.I)
 ISO_PATTERN = re.compile(r"(?<![\w-])\d{4}-\d{1,2}-\d{1,2}(?![\w-])")
+US_PATTERN = re.compile(r"(?<![\w/])\d{1,2}/\d{1,2}/\d{4}(?![\w/])")
 WEEKDAY_PATTERN = re.compile(r"\b(?:" + "|".join(sorted(legacy.WEEKDAYS, key=len, reverse=True)) + r")s?\b", re.I)
 RANGE_CONNECTOR = re.compile(r"\s*(?:to|through|until|[-\u2013])\s*", re.I)
+DATE_TOKEN_PATTERN = (rf"(?:\d{{4}}-\d{{1,2}}-\d{{1,2}}|\d{{1,2}}/\d{{1,2}}/\d{{4}}|"
+                      rf"{MONTH_PATTERN}\s+\d|\d{{1,2}}(?:st|nd|rd|th)?\s+{MONTH_PATTERN}|"
+                      r"today\b|tomorrow\b|yesterday\b)")
 
 
 def _masked(text, spans, barrier=False):
@@ -193,6 +199,15 @@ def _temporal(text, reference, date_limit, limit):
             raise ValueError(f"Invalid ISO date '{match.group()}'. Use a real date in YYYY-MM-DD format.") from None
         regions.append((match.start(), match.end(), [(day, day)]))
         spans.append(match.span())
+    working = _masked(text, spans)
+    for match in US_PATTERN.finditer(working):
+        try:
+            month, day_number, year = map(int, match.group().split('/'))
+            day = date(year, month, day_number)
+        except ValueError:
+            raise ValueError(f"Invalid MM/DD/YYYY date '{match.group()}'. Month must come first; DD/MM/YYYY is not supported.") from None
+        regions.append((match.start(), match.end(), [(day, day)]))
+        spans.append(match.span())
     for pattern in (WRITTEN_PATTERN, DAY_FIRST_PATTERN):
         working = _masked(text, spans)
         for match in pattern.finditer(working):
@@ -209,7 +224,7 @@ def _temporal(text, reference, date_limit, limit):
             spans.append(match.span())
     working = _masked(text, spans)
     if re.search(r"\b\d{1,4}[/-]\d{1,2}(?:[/-]\d{1,4})?\b", working):
-        raise ValueError("Ambiguous or unsupported numeric date. Use YYYY-MM-DD or a written month name.")
+        raise ValueError("Unsupported numeric date. Use MM/DD/YYYY, YYYY-MM-DD or a written month name; DD/MM/YYYY is not supported.")
     relative = re.compile(r"\b(?:today|tomorrow|yesterday|(?:next|this)\s+(?:" +
                           '|'.join(sorted(legacy.WEEKDAYS, key=len, reverse=True)) + r"))\b", re.I)
     for match in relative.finditer(working):
@@ -289,6 +304,47 @@ def _temporal(text, reference, date_limit, limit):
     return tuple(sorted(dates)), spans, bool(has_repeat or scopes or any(start != end for start, end in segments))
 
 
+def _date_clauses(tail):
+    """Split only explicit date-first associations, retaining shared date lists.
+
+    A session followed by a connector and another date starts a new clause.
+    Semicolons explicitly separate clauses, including ones with no session.
+    A plain date list with one trailing session remains a shared pattern.
+    Unknown leftovers are validated, never discarded, by _parse_clause.
+    """
+    date_start = rf"(?:{DATE_TOKEN_PATTERN}|from\b|between\b)"
+    boundary = re.compile(rf"(?:\s*;\s*|\s*,\s*(?:and\s+)?|\s+and\s+)(?=(?:on\s+)?{date_start})", re.I)
+    clauses, start = [], 0
+    for match in boundary.finditer(tail):
+        prefix = tail[start:match.start()]
+        has_session = any(re.search(pattern, prefix, re.I) for pattern in legacy.SESSION_PATTERNS.values())
+        if ';' in match.group() or has_session:
+            clauses.append(prefix)
+            start = match.end()
+    clauses.append(tail[start:])
+    return clauses
+
+
+def _parse_clause(tail, reference_date, date_limit, limit):
+    dates, date_spans, recurring = _temporal(tail, reference_date, date_limit, limit)
+    session_text = _masked(tail, date_spans, barrier=True)
+    session, error = legacy.parse_session(session_text)
+    if error:
+        raise ValueError(error + " Attach each session to its date clause.")
+    session_spans = [match.span() for pattern in legacy.SESSION_PATTERNS.values()
+                     for match in re.finditer(pattern, session_text, re.I)]
+    concrete_dates = list(re.finditer(DATE_TOKEN_PATTERN, tail, re.I))
+    if len(concrete_dates) > 1 and any(concrete_dates[0].start() < start < concrete_dates[-1].start()
+                                      for start, end in session_spans):
+        raise ValueError("Unclear date/session association. Put each date before its session and separate clauses with 'and' or a semicolon.")
+    remainder = _masked(tail, date_spans + session_spans)
+    remainder = re.sub(r"\b(?:on|for|in|the|and|both)\b", " ", remainder, flags=re.I)
+    remainder = re.sub(r"[\s,.:&/]+", " ", remainder).strip()
+    if remainder:
+        raise ValueError(f"Unrecognized or unsupported clause '{remainder}'. Use one shared location and explicit date/session clauses.")
+    return dates, session or FULL_DAY, recurring
+
+
 def parse_command(text, providers, locations, reference_date, *, max_assignments=None):
     """Resolve the complete ADD command or return a blocking clarification."""
     try:
@@ -303,20 +359,17 @@ def parse_command(text, providers, locations, reference_date, *, max_assignments
         ids, location, tail = _entities(text.strip(), providers, locations)
         if len(ids) > limit:
             raise ValueError(limit_message(limit))
-        dates, date_spans, recurring = _temporal(tail, reference_date, limit // len(ids), limit)
-        # Barriers preserve clause boundaries: dates between AM and PM must not
-        # turn mixed date/session clauses into a single full-day assignment.
-        session_text = _masked(tail, date_spans, barrier=True)
-        session, error = legacy.parse_session(session_text)
-        if error:
-            raise ValueError(error + " Use one shared session pattern for all providers and dates.")
-        session_spans = [match.span() for pattern in legacy.SESSION_PATTERNS.values()
-                         for match in re.finditer(pattern, session_text, re.I)]
-        remainder = _masked(tail, date_spans + session_spans)
-        remainder = re.sub(r"\b(?:on|for|in|the|and|both)\b", " ", remainder, flags=re.I)
-        remainder = re.sub(r"[\s,.;:&/]+", " ", remainder).strip()
-        if remainder:
-            raise ValueError(f"Unrecognized or unsupported clause '{remainder}'. Use one shared location, session and date pattern; split mixed clauses into separate commands.")
-        return Command(ids, location, dates, session or FULL_DAY, recurring)
+        pairs, recurring = set(), False
+        for clause in _date_clauses(tail):
+            dates, session, repeats = _parse_clause(clause, reference_date, limit // len(ids), limit)
+            pairs.update((day, session) for day in dates)
+            recurring |= repeats
+            if len(pairs) * len(ids) > limit:
+                raise ValueError(limit_message(limit))
+        date_sessions = tuple(sorted(pairs))
+        dates = tuple(sorted({day for day, session in pairs}))
+        sessions = {session for day, session in pairs}
+        return Command(ids, location, dates, next(iter(sessions)) if len(sessions) == 1 else None,
+                       recurring, date_sessions=date_sessions)
     except (ValueError, OverflowError) as exc:
         return Command(error=str(exc))

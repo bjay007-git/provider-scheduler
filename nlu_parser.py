@@ -148,15 +148,24 @@ def parse_single_date(text, reference_date=None):
     fails on real sentences ('next Monday morning' -> None, oddly).
     search_dates() is built to pull a date phrase out of free text, which
     is what we actually need here."""
-    # ISO dates are unambiguous. Do not let dateparser reinterpret an invalid
-    # month as a day (e.g. 2026-13-01 becoming January 13).
-    iso_dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", text)
-    if iso_dates:
-        try:
-            return date.fromisoformat(iso_dates[0])
-        except ValueError:
-            return None
-    settings = {"PREFER_DATES_FROM": "future"}
+    # Keep this legacy adapter consistent with the active command parser.
+    # Never allow dateparser to swap an invalid month/day or repair leap days.
+    numeric_dates = re.findall(r"\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})\b", text)
+    if numeric_dates:
+        parsed = []
+        for value in numeric_dates:
+            try:
+                if '/' in value:
+                    month, day, year = map(int, value.split('/'))
+                    parsed.append(date(year, month, day))
+                else:
+                    parsed.append(date.fromisoformat(value))
+            except ValueError:
+                return None
+        return parsed[0]
+    if re.search(r"\b\d+[/-]\d+", text):
+        return None
+    settings = {"PREFER_DATES_FROM": "future", "DATE_ORDER": "MDY", "PREFER_LOCALE_DATE_ORDER": False}
     if reference_date:
         settings["RELATIVE_BASE"] = _as_datetime(reference_date)
     found = dateparser.search.search_dates(text, settings=settings)
