@@ -319,7 +319,8 @@ boundaries, approval receipts, and source-input invalidation are reused.
 
 The current manual checklist replaces the old rejection expectations for valid
 MM/DD/YYYY dates and explicit mixed date/session clauses. Prior verification
-results above remain historical; the following browser checks are **pending**.
+results above remain historical; results for the following browser checks are
+recorded in the completed verification section below.
 Use a fresh disposable source-only launch from the instructions above, with
 the updated files. The previously running instance uses an older source copy.
 Do not use the original database. These explicit dates do not depend on today.
@@ -363,4 +364,87 @@ for this addendum are not claimed until the user performs the checks.
 
 Validation: **107 automated tests passed**, including all Stage 1/2/3
 regressions and Streamlit AppTest checks (calendar/microphone widgets stubbed).
-No new live-browser checks were performed for this addendum.
+These automated results were recorded at implementation time. Subsequent
+user-performed browser checks are recorded below; no browser automation was used.
+
+### Addendum browser verification (completed, 2026-11-12 through 2026-11-13)
+
+- Branch `feature/scheduling-enhancements`, parser commit `fe43256`.
+- Restarted http://127.0.0.1:8504 from a new source-only disposable directory:
+  `C:\Users\bjaya\AppData\Local\Temp\scheduler-fe43256-dbd2f834-3724-4a5b-a42d-91281d45412d`.
+  Source hashes match the working tree at that commit. Original database and
+  previous Stage 3 disposable database were not copied or reset; Microsoft/
+  remains untouched. Limit 40 applies only to the disposable server process.
+- Health 200; fresh read-only baseline: zero schedule rows and zero approval
+  receipts. Original database SHA-256 remains unchanged.
+- Browser checks were user-performed, one at a time, and marked passed only
+  after user confirmation. Preview-only cases were cancelled before the next
+  case; approval/conflict cases used independent dates. No test-data reset was
+  needed. No Stage 4 work or push was performed.
+- User confirmed four preview checks: `01/06/2027` resolves to January 06,
+  2027 Full day; ISO mixed clauses resolve to Jan 6 AM / Jan 7 PM; reversed
+  slash-date clauses retain those associations; Jan 6 `morning and afternoon`
+  plus an omitted session on Jan 7 yields two Full day assignments. Each prior
+  preview was cancelled, current preview unapproved. Read-only counts: 0 rows,
+  0 receipts. Browser results are user-confirmed, not automated browser actions.
+- User confirmed invalid month `13/06/2027` is blocked without swapping to
+  June 13; invalid leap day `02/29/2027` is blocked; valid `02/29/2028` previews
+  February 29, 2028 Full day. Semicolon-separated `01/06/2027; 01/07/2027
+  afternoon` previews Jan 6 Full day / Jan 7 PM. None approved; read-only
+  counts remain 0 schedule rows and 0 receipts.
+- User confirmed `04/31/2027` is rejected, unclear `01/06/2027 morning and
+  afternoon 01/07/2027` is rejected, and `except holidays` blocks the whole
+  otherwise valid mixed command. Written `January 6, 2027` retains the same
+  January 06, 2027 Full day preview as month-first input. No approvals;
+  read-only counts remain 0 schedule rows and 0 receipts.
+- User confirmed ISO `2027-01-06` matches the same Full day preview. Independent
+  approval case `01/08/2027 morning and 01/09/2027 afternoon` showed exactly
+  two valid assignments. User approved and confirmed 2 added / 0 skipped /
+  0 failed, correct Jan 8 AM / Jan 9 PM calendar labels, draft clearing and
+  microphone/calendar still visible. Read-only query confirms exactly these
+  two Khan/CGH rows and one approval receipt.
+- User confirmed reinterpreting Jan 8 AM / Jan 9 PM produces two conflicts
+  with approval disabled. For second-clause stale-conflict testing, Tab A
+  previewed Jan 6 AM / Jan 7 PM at CGH as two valid assignments; Tab B approved
+  Khan/RVC Jan 7 PM only. Read-only baseline before Tab A approval: three rows,
+  two receipts; Jan 6/7 contains only the RVC Jan 7 PM row.
+- Second-clause stale-conflict rejection passed: Tab A reported "Validation
+  changed. Nothing saved; generate and review a new preview." with 0 added /
+  1 skipped / 1 failed. Read-only counts remain three rows/two receipts;
+  Jan 6/7 still contains only Tab B's RVC Jan 7 PM booking. Neither CGH
+  assignment was saved, including the conflict-free first clause.
+- User confirmed regenerated Jan 6 AM / Jan 7 PM preview shows valid/conflict
+  respectively and disables approval for the whole batch. For the independent
+  first-clause conflict case, Tab A previewed Jan 10 AM / Jan 11 PM at CGH as
+  valid. On Nov 13, user confirmed Tab B approved Khan/RVC Jan 10 AM. Read-only
+  baseline before Tab A approval: four schedule rows/three receipts; Jan 10/11
+  contains only the RVC Jan 10 AM row.
+- First-clause stale-conflict rejection passed: user confirmed Tab A's older
+  preview rejected approval with the validation-changed/nothing-saved message.
+  Final read-only counts remain **four schedule rows and three approval
+  receipts**. January 11 remains empty. The entire saved row set is exactly
+  Khan/CGH Jan 8 AM, Khan/CGH Jan 9 PM, Khan/RVC Jan 7 PM, Khan/RVC Jan 10 AM.
+  Neither rejected batch saved its conflict-free assignment.
+- Original database SHA-256 remains
+  `D8C8383D235F4EA3B70A38060E60D7F6B5312C9E1DF545E69572A0C511B93E96`.
+  Microsoft/ and the previous disposable database were untouched. No application
+  fixes were required during this verification; only this documentation changed.
+
+| Addendum verification | Result | Evidence |
+|---|---|---|
+| MM/DD/YYYY is month first; ISO/written formats retained | Pass (user browser) | All three formats showed January 06, 2027 Full day |
+| Mixed clauses and reversed order | Pass (user browser) | Jan 6 AM / Jan 7 PM associations retained with ISO/slash dates |
+| Same-date combined sessions and omitted sessions | Pass (user browser) | Combined AM/PM and omitted session each showed explicit Full day; semicolon case retained Full day/PM |
+| Invalid month, impossible date and leap-day validation | Pass (user browser) | 13/06/2027, 04/31/2027 and 02/29/2027 rejected; 02/29/2028 accepted |
+| Unclear associations and unsupported remainder | Pass (user browser) | Whole command blocked; no partial approval |
+| Interpretation and cancellation write nothing | Pass (browser + read-only) | Database stayed empty throughout preview-only cases |
+| Exact approval, calendar labels and draft reset | Pass (browser + read-only) | Two exact Jan 8 AM / Jan 9 PM rows, one receipt; correct calendar and cleared draft, microphone still visible |
+| Duplicate command blocking | Pass (user browser) | Both saved assignments conflicted on reinterpretation; approval disabled |
+| Conflict in second clause | Pass (browser + read-only) | Stale approval rejected the whole Jan 6/7 batch; Jan 6 remained empty; regenerated preview blocked approval |
+| Conflict in first clause | Pass (browser + read-only) | Stale approval rejected the whole Jan 10/11 batch; Jan 11 remained empty |
+| Stage 1/2/3 regressions and same-token replay | Pass (automated only) | 107 tests at implementation commit; temporary databases; AppTest widgets stubbed |
+
+All requested new browser cases passed; no outstanding failures or pending
+requested cases. Live microphone recording and same-token replay were not
+repeated in this browser run (earlier Stage 3 microphone verification and
+automated replay coverage remain separate evidence).
