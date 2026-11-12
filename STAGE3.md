@@ -158,3 +158,131 @@ remain untouched. Ctrl+C stops this server.
    invalidation, full-day conflicts, and December/January navigation as in
    Stage 2. No saved recurrence rules, month duplication, DELETE/MODIFY, new date
    picker, or LLM integration is part of this stage.
+
+## Verification run: 2026-11-09 through 2026-11-12
+
+- Branch `feature/scheduling-enhancements`; implementation commit `d47c1b3`.
+- Actual reference date reported by the app's Python process: **2026-11-09**.
+- Fresh disposable app: **http://127.0.0.1:8504**. Source directory:
+  `C:\Users\bjaya\AppData\Local\Temp\scheduler-stage3-161578ef-b03d-4c54-a902-35dc8e4dd5d2`.
+- The lower assignment limit is **40 only in this disposable server process**;
+  the repository default remains 500. Original database and Microsoft/ untouched.
+- Initial read-only database baseline: **0 schedule rows, 0 approval receipts**.
+- Browser-access host is unavailable. Native Chrome control was denied with
+  "Computer Use was not approved to use Google Chrome". Browser checks are
+  user-performed and recorded as passed only after user confirmation.
+
+| Verification | Status | Evidence |
+|---|---|---|
+| Setup and original database preservation | Pass (shell/read-only checks) | Correct branch/commit; server health 200; original SHA-256 unchanged |
+| Automated Stage 1/2/3 suites | Pass (automated only) | 95 tests; temporary databases |
+| Multiple providers, weekdays, rest of month | Pass (user-performed browser check) | User confirmed 32 valid AM assignments: official provider/location names and Nov 9–13, 16–20, 23–27, 30; not approved |
+| Date lists, ranges, Mon/Wed/Fri, next month | Pass (user browser) | Exact dates/counts confirmed; inclusive ranges, leap day, year boundary and default recurrence range |
+| Omitted and combined sessions, deduplication | Pass (user browser + read-only) | Full day defaults, AM and PM, reversed words; repeated provider/date reduced to two assignments |
+| Unknown/uncertain names and unsupported clauses | Pass (user browser) | Unknown/fuzzy providers, multiple locations, mixed sessions, alternatives, DELETE/MODIFY blocked |
+| Synthetic ambiguous surnames/location aliases | Pass (automated only); browser not run | Temporary master-data fixtures in tests; disposable browser master data not modified |
+| Invalid dates/ranges and provider-location mappings | Pass (user browser) | Numeric/invalid/reversed/no-matching dates and Rao/RVC mapping blocked approval |
+| Disposable assignment limit | Pass (user browser) | Two providers next month rejected at limit 40 without truncation |
+| Preview and no writes before approval | Pass (browser + read-only checks) | User left the matching preview unapproved; database remains at 0 schedule rows and 0 receipts |
+| Edit/Cancel and input invalidation | Pass (user browser + read-only checks) | On Nov 12, user confirmed Edit removed the preview, changed mornings to afternoons, regenerated 26 PM assignments, then Cancel removed the preview; schedules/receipts remained 0/0 |
+| Atomic approval and stale conflicts | Pass (user browser + read-only) | Full day, recurrence and both copy flows saved exact batches; late conflict rolled back all four proposed assignments |
+| Duplicate command / repeated batch token | Pass (user browser / automated respectively) | Reinterpretation blocked all four conflicts; same-token idempotency tested automatically |
+| Calendar labels and microphone transcription | Pass (user browser) | Full day and AM/PM labels, month/year navigation, transcription, editable draft and post-save clearing/remount confirmed |
+
+No application-code fixes were needed in this verification run. Stage 4 has not
+started; nothing pushed. The documentation commit records these results on top
+of implementation commit `d47c1b3`.
+
+### Resumed 2026-11-12
+
+- Restarted the same disposable database at http://127.0.0.1:8504 with limit 40.
+- Health check returned 200. Read-only baseline remains 0 schedule rows and
+  0 approval receipts; original database SHA-256 remains unchanged.
+- The app reference date is now 2026-11-12. The first example now produces
+  26 logical assignments: each provider on Nov 12, 13, 16–20, 23–27, and 30.
+  Earlier Nov 9 preview observations remain historical results.
+- At restart, Edit/Cancel was the next check; the previous pending preview was
+  cleared and regenerated. Its confirmed result is recorded below.
+- Calendar recovery incident (resolved): the user reported a pandas initialization
+  error. The first server traceback showed Windows Application Control blocking
+  a pandas DLL; later imports reported partially initialized pandas. A fresh
+  Python process successfully imported pandas 3.1.0 and constructed a DataFrame.
+  Restarted only the disposable server; health 200, schedules/receipts still
+  0/0, original database hash unchanged. No application code or dependencies
+  changed. The user subsequently confirmed calendar rendering after refresh.
+- User confirmed the calendar grid recovered after refresh. Confirmed the
+  regenerated 26-assignment AM preview, Edit, replacement with 26 PM assignments,
+  and Cancel. Read-only verification after Cancel: 0 schedules, 0 receipts.
+  Subsequent microphone and calendar checks are recorded below.
+- Full-day approval passed (user browser + read-only checks): preview showed
+  four Full day assignments for Khan/Rao at CGH on Jan 4/5, 2027. User confirmed
+  approval feedback 4 added, 0 skipped, 0 failed and combined calendar labels
+  after navigation to January. Database contains exactly the eight expected
+  AM/PM rows and one approval receipt. Duplicate-command check is recorded below.
+- Reinterpreting the same approved command passed: user confirmed four
+  full-day conflicts with approval disabled. Read-only counts remain eight
+  schedule rows and one receipt. Durable replay of the same batch token remains
+  covered by automated tests; this browser check verifies duplicate-command
+  conflict blocking.
+- Deduplication passed (user browser): repeated Khan and Jan 6, 2027 produced
+  exactly two AM assignments (Khan/Rao). Preview cancelled without approval.
+- Invalid mapping and inclusive two-day range passed (user browser): Khan/Rao
+  at RVC Jan 6–7, 2027 produced four Full day assignments; Rao's mapping errors
+  blocked the whole batch. Read-only counts remain eight rows and one receipt.
+- User-performed browser rejection checks passed for unknown provider
+  `Khan and Unknown CGH tomorrow`, uncertain spelling `Kahn and Rao CGH tomorrow`,
+  multiple locations `Khan CGH and RVC tomorrow`, and mixed sessions
+  `Khan CGH 2027-01-06 morning and 2027-01-07 afternoon`. Each blocked approval
+  without accepting a recognized subset or collapsing mixed sessions to Full
+  day. Read-only counts remain eight schedule rows and one receipt.
+- User confirmed blocking errors for ambiguous numeric date `01/06/2027`,
+  reversed range `2027-01-07 to 2027-01-06`, and invalid date `2027-02-30`.
+- Next month with Mon/Wed/Fri passed (user browser, reference Nov 12, 2026):
+  `Khan CGH next month Mon/Wed/Fri mornings` yielded 13 valid AM assignments
+  on Dec 2, 4, 7, 9, 11, 14, 16, 18, 21, 23, 25, 28, 30. Not approved.
+  Read-only database counts remain eight schedule rows and one receipt.
+- User-performed browser checks passed: Dec 5–6, 2026 filtered to weekdays
+  reports no matching dates; two providers for all of next month exceeds the
+  disposable limit 40 and rejects without truncation; Feb 28–Mar 1, 2028
+  produces three Full day assignments including leap day; Dec 31, 2026–Jan 2,
+  2027 produces three Full day assignments across the year boundary. None
+  approved. Read-only counts remain eight schedule rows and one receipt.
+- Recurrence without explicit range passed (user browser + read-only check):
+  `Ortiz CGH every Monday and Wednesday afternoons` expanded to Nov 16, 18,
+  23, 25, 30, 2026 using Nov 12 reference date. User approved and confirmed
+  5 added / 0 skipped / 0 failed and five PM calendar labels. Read-only query
+  confirms exactly these five Ortiz rows; totals now 13 rows and two receipts.
+- Stale-conflict atomicity passed (user browser + read-only checks): Tab A
+  previewed four Full day Khan/Rao assignments at CGH Jan 8/9, 2027. Tab B
+  approved Rao at LKH Jan 9 PM (one row). Tab A approval reported "Validation
+  changed. Nothing saved; generate and review a new preview." Counts remain
+  14 rows and three receipts; Jan 8/9 contains only Tab B's Rao/LKH/Jan 9/PM
+  row. None of Tab A's batch was written.
+- Copy-day passed (user browser + read-only): copied Jan 4, 2027 to Jan 6;
+  preview contained two valid Full day Khan/Rao assignments at CGH. User
+  confirmed approval feedback 2 added / 0 skipped / 0 failed and combined
+  calendar labels. Exactly four AM/PM rows were added; totals 18 rows and
+  four receipts.
+- Copy-single-assignment passed (user browser + read-only): Khan/CGH Jan 4
+  copied to Jan 7, 2027 as one Full day preview. User confirmed 1 added /
+  0 skipped / 0 failed and one combined label. Both AM/PM rows saved; totals
+  20 schedule rows and five receipts.
+- User browser checks passed: reversed `afternoon and morning` produced one
+  Full day preview for Khan/CGH Jan 10, 2027; changing the transcript date to
+  Jan 11 without Edit automatically discarded the preview and approval controls.
+  `morning or afternoon` required clarification. DELETE and MODIFY commands
+  were rejected with "Only ADD commands are supported in this stage."
+  Read-only totals remain 20 rows/five receipts, with no Jan 10/11 rows.
+- Live voice flow passed (user browser): microphone populated the editable
+  transcript with calendar visible. User corrected/interpreted
+  `Khan at City General 2027-01-12 morning`, confirmed one valid AM preview,
+  approved, and confirmed 1 added / 0 skipped / 0 failed, Jan 12 AM label,
+  transcript clearing, and microphone/calendar visible without refresh.
+- Final read-only verification: **21 schedule rows, six approval receipts**.
+  The complete saved row set exactly matches the six approved batches; no
+  unexpected or missing rows. Original database SHA-256 remains
+  `D8C8383D235F4EA3B70A38060E60D7F6B5312C9E1DF545E69572A0C511B93E96`.
+- All 95 automated regression tests passed again on Nov 12 using temporary
+  databases. Browser checks were performed by the user, not browser automation.
+  Synthetic name ambiguity and replay of the same batch token remain
+  automated-only coverage; they are not claimed as browser-tested.
